@@ -1,3 +1,8 @@
+"""
+MySQL MCPServer 
+接收来自client发送的sql语句，调用aiomysql执行sql获得结果
+"""
+
 import logging
 import sys
 import json
@@ -17,13 +22,13 @@ logging.basicConfig(
 logger = logging.getLogger("mysql_mcp_server")
 
 def get_db_config():
-    """硬编码数据库配置。"""
+    """从环境变量加载数据库配置，如果未设置则使用默认值。"""
     return {
-        "host": "localhost",
-        "port": 3306,
-        "user": "root",
-        "password": "123456",
-        "db": "test",
+        "host": os.getenv("MYSQL_HOST", "localhost"),
+        "port": int(os.getenv("MYSQL_PORT", "3306")),
+        "user": os.getenv("MYSQL_USER", "root"),
+        "password": os.getenv("MYSQL_PASSWORD", "123456"),
+        "db": os.getenv("MYSQL_DB", "test"),
         "autocommit": False # 将autocommit 设置为 False，以便手动控制事务
     }
 
@@ -79,8 +84,8 @@ mcp_app = FastMCP(
     "mysql-mcp-server",
     instructions="基于MCP协议的MySQL数据库查询服务",
     session_handler=session_handler,
-    host="127.0.0.1",
-    port=8000,
+    host=os.getenv("MYSQL_MCP_HOST", "127.0.0.1"),
+    port=int(os.getenv("MYSQL_MCP_PORT", "8000")),
     sse_path="/sse"
 )
 
