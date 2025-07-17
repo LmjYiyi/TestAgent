@@ -8,6 +8,7 @@ import logging
 import asyncio
 import requests
 import json
+import os
 from mcp.server.fastmcp import FastMCP
 from mcp.types import TextContent
 from typing import Dict, Any, Optional, List
@@ -41,8 +42,8 @@ mcp_app = FastMCP(
     "tested_project_mcp_server",
     instructions="基于mcp协议的后端接口调用服务",
     session_handler=session_handler,
-    host = "localhost",
-    port = 8001,
+    host=os.getenv("API_MCP_HOST", "localhost"),
+    port=int(os.getenv("API_MCP_PORT", "8001")),
     sse_path = "/sse"
 )
 
