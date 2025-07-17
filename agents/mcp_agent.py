@@ -35,7 +35,7 @@ def get_mcp_agent():
         
         请严格使用以下格式回答：
         
-        Question: <用户提问>
+        Question: <用户提问>...................
         Thought: <你的思考>
         Action: <工具名称，如 Search>
         Action Input: <传给工具的输入内容>

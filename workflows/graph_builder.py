@@ -299,7 +299,7 @@ def build_graph():
 
     # 编译图
     compiler = builder.compile()
-    compiler.get_graph().draw_mermaid_png(output_file_path="main_graph.png")
+    #compiler.get_graph().draw_mermaid_png(output_file_path="main_graph.png")
     return compiler
 
 if __name__ == '__main__':
