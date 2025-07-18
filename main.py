@@ -1,8 +1,9 @@
 from utils.logger import setup_logger
 from workflows.graph_builder import build_graph
+import asyncio
 
 logger = setup_logger(log_level="INFO")
-def run():
+async def run():
     logger.info("============测试案例智能生成助手启动============")
     # 构建工作流
     work_graph = build_graph()
@@ -26,7 +27,7 @@ def run():
     # 循环问用户
     while True:
         # 跳出循环的判断
-        if state.get("output") and "执行完毕" in state["output"]:
+        if state.get("output") and ("执行完毕" in state["output"] or "终止" in state["output"]):
             break
         # 需用户交互
         if state["output"] is not None:
@@ -40,7 +41,7 @@ def run():
         else:
             print("请稍等...")
         # 同步阻塞
-        state = work_graph.invoke(state)
+        state = await work_graph.ainvoke(state)
 
 if __name__ == '__main__':
-    run()
+    asyncio.run(run())

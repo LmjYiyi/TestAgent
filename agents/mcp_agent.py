@@ -1,70 +1,80 @@
-from langchain.agents import  Tool, AgentExecutor
-from langchain.agents import create_react_agent
-from langchain_core.prompts import PromptTemplate, StringPromptTemplate
+from langchain.agents import AgentExecutor
+from langchain.agents import create_tool_calling_agent
 from models.dquestion import get_llm
-from langchain_openai import OpenAI  # 确保这是正确的导入路径
-import os
-# from tools.calculator_tool import calculator_tool
-# from tools.qry_interfaces import qry_interface_tool
+from langchain_mcp_adapters.client import MultiServerMCPClient
+from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
+from utils import logger
+
+llm = get_llm()
+
+# 全局缓存
+_agent_executor_cache = None
+_client_instance = None
 
 
-def get_mcp_agent():
-    # 1. 创建 LLM
-    llm = get_llm()
-    #  tools：你定义的工具列表
-    tools = [
-        # calculator_tool,
-        #tool_web_search,
-        #tool_get_current_weather,
-        #tool_get_weather_forecast,
-        #tool_search_city,
-        # qry_interface_tool
-    ]
+async def get_mcp_agent():
+    global _agent_executor_cache, _client_instance
 
-    # Step 3: 构造工具描述字符串
-    tool_descriptions = "\n".join([f"{t.name}: {t.description}" for t in tools])
-    tool_names = ", ".join([t.name for t in tools])
+    if _agent_executor_cache is not None:
+        return _agent_executor_cache
 
-    # 3. 构建 Prompt（保留变量：tools、tool_names）
-    template = """你是一个智能体，能一步步思考并调用工具解决问题。
-        
-        工具列表：
-        {tools}
-        
-        你可以使用这些工具：{tool_names}
-        
-        请严格使用以下格式回答：
-        
-        Question: <用户提问>...................
-        Thought: <你的思考>
-        Action: <工具名称，如 Search>
-        Action Input: <传给工具的输入内容>
-        Observation: <工具返回的结果>
-        ...（多轮 Thought / Action / Action Input / Observation）
-        Thought: 我已得到答案
-        Final Answer: <最终回答>
-        
-        示例：
-        Question: 天气怎么样？
-        Thought: 我需要查询天气
-        Action: Search
-        Action Input: 北京天气
-        Observation: 今天晴，25度
-        Thought: 我已得到答案
-        Final Answer: 北京今天晴，25度。
-        
-        现在开始：
-        
-        Question: {input}
-        {agent_scratchpad}
+    logger.info("开始构造MCP代理>>>>......")
+
+    if _client_instance is None:
+        _client_instance = MultiServerMCPClient(
+            {
+                # 本地服务，注意args参数
+                "math": {
+                    "command": "python",
+                    "args": ["mcp_servers/mcp_server_math.py"],
+                    "transport": "stdio",
+                },
+                # 远程服务，需要启起来
+                "weather": {
+                    "url": "http://127.0.0.1:8000/sse",
+                    "transport": "sse",
+                }
+            }
+        )
+
+    # 获取工具
+    logger.info("开始获取工具>>>>......")
+    tools = await _client_instance.get_tools()
+
+    system_prompt = """你是一个智能助手，请优先调用工具来回答用户的问题。
+    不要依赖内部知识库或猜测结果，所有回答都应尽可能基于工具返回的数据。
+    不要编造不存在的问题，请完全基于用户提供的内容进行回答。
     """
 
-    # 4. 构造 PromptTemplate（保留 tools/tool_names）
-    prompt = PromptTemplate.from_template(template)
+    prompt = ChatPromptTemplate.from_messages(
+        [
+            ("system", system_prompt),
+            ("user", "{input}"),
+            # 模型思考过程
+            MessagesPlaceholder(variable_name="agent_scratchpad", optional=True),
+        ]
+    )
 
-    # 5. 创建 ReAct Agent（自动注入 tools/tool_names）
-    agent = create_react_agent(llm=llm, tools=tools, prompt=prompt)
+    agent = create_tool_calling_agent(llm, tools, prompt)
 
-    # 6. 执行器
-    executor = AgentExecutor.from_agent_and_tools(agent=agent, tools=tools, verbose=True,handle_parsing_errors=True)
+    # 执行器
+    executor = AgentExecutor.from_agent_and_tools(
+        agent=agent,
+        tools=tools,
+        verbose=True,
+        # return_intermediate_steps=True, # 返回中间步骤
+        early_stopping_method="generate",  # 超时自动生成答案
+        max_iterations=5,  # 最多执行5步，不输入的话默认15
+        handle_parsing_errors=True
+    )
+    # 获取到执行器
+    logger.info("MCP代理构建完成>>>>......")
+    _agent_executor_cache = executor
     return executor
+
+
+async def close_mcp_agent():
+    global _client_instance
+    if _client_instance:
+        await _client_instance.close_servers()
+        _client_instance = None

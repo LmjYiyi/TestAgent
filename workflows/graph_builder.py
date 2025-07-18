@@ -2,33 +2,36 @@ from langgraph.graph import StateGraph, END
 from langchain_core.prompts import ChatPromptTemplate
 from agents.mcp_agent import get_mcp_agent
 from models.dquestion import get_llm
-# from tools.rag_tools import query_interface_tool,query_execute_steps_tool
+from langchain_core.messages import SystemMessage, HumanMessage
 from utils import logger
 import json
-from typing import TypedDict, List, Optional,Literal
+from typing import TypedDict, List, Optional, Literal
+
 
 # 1. 定义状态结构
 # ----------------------------------
 class AgentState(TypedDict):
     user_input: str
-    current_stage: Literal["confirm_scene", "retrieve_steps", "confirm_steps", "execute_step"] # 当前阶段，langgraph不支持从任一节点开始，必须从入口节点开始，所以要标记状态
-    pending_action: Optional[str] # 挂起的动作
-    user_confirmed: Optional[bool] # 用户是否确认
-    api_list: List[str] # 接口场景列表
-    selected_scene: dict # 所选择的接口场景
-    origin_step_list: List[str] # 原始步骤列表
-    step_list: List[str] # 最终步骤列表
-    current_step: int # 当前步骤
-    step_outputs: List[str] # 步骤输出
-    step_results: List[dict] # 步骤结果
+    current_stage: Literal[
+        "confirm_scene", "retrieve_steps", "confirm_steps", "execute_step"]  # 当前阶段，langgraph不支持从任一节点开始，必须从入口节点开始，所以要标记状态
+    pending_action: Optional[str]  # 挂起的动作
+    user_confirmed: Optional[bool]  # 用户是否确认
+    api_list: List[str]  # 接口场景列表
+    selected_scene: dict  # 所选择的接口场景
+    origin_step_list: List[str]  # 原始步骤列表
+    step_list: List[str]  # 最终步骤列表
+    current_step: int  # 当前步骤
+    step_outputs: List[str]  # 步骤输出
+    step_results: List[dict]  # 步骤结果
     # input_params: List[str] # 接口输入参数
     # output_params: List[str] # 接口输出参数
-    error_message: Optional[str] # 错误信息
-    retry_payload: Optional[str] # 重试的参数
-    output: str # 输出结果，用来标记本次的结束
+    error_message: Optional[str]  # 错误信息
+    retry_payload: Optional[str]  # 重试的参数
+    output: str  # 输出结果，用来标记本次的结束
     # 两者的区别？
-    history: List[str] # 历史记录
+    history: List[str]  # 历史记录
     # messages: Annotated[Sequence[BaseMessage], add_messages] # 消息
+
 
 # memory = MemorySaver()
 
@@ -37,6 +40,8 @@ class AgentState(TypedDict):
 # 2.1 获取场景列表节点
 # 根据用户输入构建提示词，去调用RAG查找接口+场景列表相关文档，送入大模型并将返回到结果结构化后存入state里面
 llm = get_llm()
+
+
 def query_scene(state: AgentState) -> AgentState:
     logger.info("开始获取场景列表.....")
     template = """Question: {question}根据用户的输入转换成 接口名：场景 这样的键值对，并以列表的形式返回。请用简体中文回复。
@@ -54,20 +59,21 @@ def query_scene(state: AgentState) -> AgentState:
     #     api_list = parsed  # 直接使用解析后的列表
     # else:
     #     api_list = [str(parsed)]
-    
-    api_list = ["接口名:统一认证查询接口, 场景: 测试用户登陆","接口名：信用卡消费，场景：准贷记卡消费"]
+
+    api_list = ["接口名:统一认证查询接口, 场景: 测试用户登陆", "接口名：信用卡消费，场景：准贷记卡消费"]
 
     state["api_list"] = api_list
     # print(state["api_list"])
     # TODO: 没有考虑查询不到的情况，以及没有用户想要的场景
     output = "我找到以下场景，请输入编号确认：\n" + \
-             "\n".join([f"{i+1}. {s}" for i, s in enumerate(api_list)])
+             "\n".join([f"{i + 1}. {s}" for i, s in enumerate(api_list)])
     return {
         **state,
         "output": output,
         "current_stage": "confirm_scene",
-        "history": state["history"] + [f"助手：{output}"] 
+        "history": state["history"] + [f"助手：{output}"]
     }
+
 
 # 2.2 用户确认场景节点---交互节点
 def confirm_scene(state: AgentState) -> AgentState:
@@ -98,6 +104,7 @@ def confirm_scene(state: AgentState) -> AgentState:
             "history": state["history"] + [f"助手：{output}"]  # 追加历史
         }
 
+
 # 2.3 获取执行步骤节点
 # 这一步应该直接获取原文档内容
 def retrieve_steps(state: AgentState) -> AgentState:
@@ -115,16 +122,17 @@ def retrieve_steps(state: AgentState) -> AgentState:
         "current_stage": "confirm_steps",
         "history": state["history"] + [f"助手：{output}"]  # 追加历史
     }
-    # 如果没查到的处理逻辑 todo
+    # TODO: 如果没查到的处理逻辑
+
 
 # 2.4 步骤确认---用户交互节点
 def confirm_steps(state: AgentState) -> AgentState:
     logger.info("开始进行场景步骤修改与合并....")
     text = state["user_input"].strip()
     # 判断用户的输入
-    if "继续" in text: 
+    if "继续" in text:
         step_list = state["origin_step_list"]
-    else :
+    else:
         # 调用大模型组织结果
         template2 = """用户输入：{question}，原始内容{origin}。请仔细看用户输入内容，如果是对原始内容的追加，则结合用户输入和原始文本内容，将内容进行重新组织成步骤列表；如果是完整的步骤内容，则将完整的步骤整理后返回。
         例如，用户输入：步骤四、校验数据，原始内容：步骤一、获取数据\n步骤二、处理数据\n步骤三、输出结果，则最后应该返回：步骤一、获取数据\n步骤二、处理数据\n步骤三、输出结果\n步骤四、校验数据。
@@ -140,41 +148,46 @@ def confirm_steps(state: AgentState) -> AgentState:
         # content = response.content.strip()
         # # 假设传来的是字符串，需要转成list
         # step_list = [step  for step in content.split('\n')]
-        step_list = ['步骤一、确认接口', '步骤二、获取数据', '步骤三、处理数据', '步骤四、输出结果']
+        # step_list = ['步骤一、确认接口', '步骤二、获取数据', '步骤三、处理数据', '步骤四、输出结果']
+        step_list = ['步骤一、(3+5)*4等于几?', '步骤二、今天的天气怎么样']
     # print(step_list)
     output = f"根据用户要求，最终步骤为：\n{step_list}，共 {len(step_list)} 步。\n开始执行步骤..."
     print(output)
     return {
-            **state,
-            "step_list": step_list,
-            "current_step": 0,
-            "step_outputs": [],
-            "step_results": [],
-            "current_stage": "execute_step",
-            "output": None,
-            "history": state["history"] + [f"助手：{output}"]  # 追加历史
-        }
+        **state,
+        "step_list": step_list,
+        "current_step": 0,
+        "step_outputs": [],
+        "step_results": [],
+        "current_stage": "execute_step",
+        "output": None,
+        "history": state["history"] + [f"助手：{output}"]  # 追加历史
+    }
+
 
 # 2.5 执行步骤-agent节点（agent里面实现执行步骤，根据状态控制是继续循环执行agent还是调用错误诊断）
-# agent里根据输入自主判断调用工具
-agent_executor = get_mcp_agent()
 
-def execute_step(state: AgentState) -> AgentState:
+
+async def execute_step(state: AgentState) -> AgentState:
+    # 异步获取执行agent执行器
+    agent_executor = await get_mcp_agent()
+
     i = state["current_step"]
     step = state["step_list"][i]
     retry_input = state.get("retry_payload")
+    if retry_input is not None:
+        step = retry_input
     # 如果retry_input不为空，则用retry_input替代step,成功后清空
-    logger.info(f"开始执行步骤{i+1}: {step}")
-    print(f"开始执行步骤{i+1}: {step}")
-    try: 
-        # response = agent_executor.invoke({"input": step})
+    logger.info(f"开始执行步骤{i + 1}: {step}")
+    print(f"开始执行步骤{i + 1}: {step}")
+    try:
+        response = await agent_executor.ainvoke({"input": step})
         # 根据response结构获取result，假设response就是结果
-
-        # summary = f"步骤{i+1}：{step} 执行成功，结果：{response}"
-        response = "201"
-        summary = f"步骤{i+1}：{step} 执行成功"
-        print(summary)
-        if response == 200:
+        print(response)
+        result = response["output"]
+        if result != "":
+            summary = f"步骤{i + 1}：{step} 执行成功，结果：{result}"
+            print(summary)
             return {
                 **state,
                 "current_step": i + 1,
@@ -182,11 +195,11 @@ def execute_step(state: AgentState) -> AgentState:
                 "step_results": state.get("step_results", []) + [response],
                 "output": None,
                 "pending_action": None,
-                "retry_payload": None,
+                "retry_payload": None,  # 清空
                 "history": state["history"] + [f"助手：{summary}"]  # 追加历史
             }
         else:
-            output = f"步骤{i+1}：{step} 执行失败：{str(response)}。请输入“继续”或“停止”，或使用 参数=xxx 格式重试。"
+            output = f"步骤{i + 1}：{step} 执行失败：{str(response)}\n请输入“继续”或“停止”，或使用 参数=xxx 格式重试。"
             # TODO: 添加诊断意见
             return {
                 **state,
@@ -198,7 +211,7 @@ def execute_step(state: AgentState) -> AgentState:
             }
     except Exception as e:
         # 是不是要在这里加诊断意见？
-        output = f"步骤{i+1}：{step} 执行失败：{str(e)}。请输入“继续”或“停止”，或使用 参数=xxx 格式重试。"
+        output = f"步骤{i + 1}：{step} 执行失败：{str(e)}。请输入“继续”或“停止”，或使用 参数=xxx 格式重试。"
         return {
             **state,
             "error_message": str(e),
@@ -208,6 +221,7 @@ def execute_step(state: AgentState) -> AgentState:
             "history": state["history"] + [f"助手：{output}"]  # 追加历史
         }
 
+
 # 2.6 错误诊断建议节点（是否要查数据库）
 # template2 = """你的工作是根据输入的错误信息，对这个错误进行分析和诊断，并给出一个建议，让用户按照这个建议进行修复。
 # 不要试图疯狂猜测，在你能够辨别所有信息后，调用相关工具。
@@ -215,7 +229,6 @@ def execute_step(state: AgentState) -> AgentState:
 
 def handle_error(state: AgentState) -> AgentState:
     text = state["user_input"].strip()
-    # 目前还需要手动退出流程
     if "停止" in text:
         return {**state, "user_confirmed": False, "output": "已终止流程。"}
 
@@ -233,17 +246,19 @@ def handle_error(state: AgentState) -> AgentState:
         "output": "未识别的输入，请输入“继续”或“停止”，或使用 参数=xxx 重试。"
     }
 
+
 # 2.7 结束节点--对外输出
 def finish(state: AgentState) -> AgentState:
     logger.info("结束")
     summary = "\n".join(state["step_outputs"])
     # output = "✅ 所有步骤执行完毕，执行摘要：\n\n" + summary
-    output= "✅ 所有步骤执行完毕！\n\n"
+    output = "✅ 所有步骤执行完毕！\n\n"
     print(output)
     return {
         **state,
         "output": output
     }
+
 
 # ----------------------
 # 2.8 构建条件入口-router
@@ -276,6 +291,7 @@ def router(state: AgentState) -> str:
             return "finish"
     return "query_scene"
 
+
 # 3. 构建图
 def build_graph():
     logger.info("============构建状态图============")
@@ -283,24 +299,22 @@ def build_graph():
     # 构建状态图
     builder = StateGraph(AgentState)
     # 设置节点
-    builder.add_node("query_scene", query_scene) # 获取接口列表
-    builder.add_node("confirm_scene", confirm_scene) # 选择接口节点
-    builder.add_node("retrieve_steps", retrieve_steps) # 检索步骤节点
-    builder.add_node("confirm_steps", confirm_steps) # 用户确认步骤节点
-    builder.add_node("execute_step", execute_step) # 执行步骤节点
-    builder.add_node("handle_error", handle_error) # 错误处理节点
-    builder.add_node("finish", finish) # 完成节点
+    builder.add_node("query_scene", query_scene)  # 获取接口列表
+    builder.add_node("confirm_scene", confirm_scene)  # 选择接口节点
+    builder.add_node("retrieve_steps", retrieve_steps)  # 检索步骤节点
+    builder.add_node("confirm_steps", confirm_steps)  # 用户确认步骤节点
+    builder.add_node("execute_step", execute_step)  # 执行步骤节点
+    builder.add_node("handle_error", handle_error)  # 错误处理节点
+    builder.add_node("finish", finish)  # 完成节点
     # 设置条件入口-路由
     builder.set_conditional_entry_point(router)
     # 设置边
-    # builder.add_edge("confirm_scene", "retrieve_steps")
-    # builder.add_edge("confirm_steps", "excute_step")
     builder.add_edge("finish", END)
 
     # 编译图
     compiler = builder.compile()
-    #compiler.get_graph().draw_mermaid_png(output_file_path="main_graph.png")
     return compiler
+
 
 if __name__ == '__main__':
     compiler = build_graph()
