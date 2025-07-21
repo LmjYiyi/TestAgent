@@ -6,7 +6,7 @@
 import sys
 import logging
 import asyncio
-import requests
+import httpx
 import json
 import os
 from mcp.server.fastmcp import FastMCP
@@ -47,14 +47,13 @@ mcp_app = FastMCP(
     sse_path = "/sse"
 )
 
-@mcp_app.tool()
+@mcp_app.tool(description="调用一个通用的HTTP/HTTPS API。对于复杂的参数，请将它们作为JSON字符串在'json_body'中传递。")
 async def call_api(url: str, method: str = "POST",
-         headers: Optional[Dict[str, str]] = None,
-         json_body: Optional[Dict[str, Any]] = None
-        ) -> List[TextContent]:
+                   headers: Optional[Dict[str, str]] = None,
+                   json_body: Optional[Dict[str, Any]] = None
+                   ) -> List[TextContent]:
     """
-    用于调用HTTP请求。
-    使用asyncio.to_thread在一个独立的线程中运行同步的requests库，避免阻塞事件循环。
+    使用httpx异步调用HTTP/HTTPS API。
 
     Args:
         url (str): 要请求的完整URL。
@@ -63,7 +62,7 @@ async def call_api(url: str, method: str = "POST",
         json_body (Optional[Dict[str, Any]]): 要在请求体中发送的JSON数据。
 
     Returns:
-        List[TextContent]: 包含从API返回的JSON响应的TextContent列表。如果发生错误，则返回一个包含错误信息的字典。
+        List[TextContent]: 包含从API返回的JSON响应的TextContent列表。如果发生错误，则返回一个包含结构化错误信息的字典。
     """
     logger.info(f"接收到API调用请求:")
     logger.info(f"  - URL: {url}")
@@ -71,30 +70,42 @@ async def call_api(url: str, method: str = "POST",
     logger.info(f"  - 请求头: {headers}")
     logger.info(f"  - JSON请求体: {json_body}")
 
-    def _sync_request_wrapper():
-        """同步执行requests调用的包装函数"""
-        try:
-            response = requests.request(
+    result_dict = {}
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.request(
                 method=method.upper(),
                 url=url,
                 headers=headers,
                 json=json_body,
-                timeout=15  # 设置一个合理的超时时间
+                timeout=15.0
             )
-            response.raise_for_status()  # 对失败的HTTP状态码抛出异常
+            response.raise_for_status()
             
             # 尝试解析JSON，如果响应体为空或不是JSON格式，则返回文本内容
             try:
-                return response.json()
+                result_dict = response.json()
             except json.JSONDecodeError:
-                return {"status_code": response.status_code, "content": response.text}
-        except requests.exceptions.RequestException as e:
-            logger.error(f"API请求失败: {e}", exc_info=True)
-            return {"error": f"请求失败: {e}"}
+                result_dict = {"status_code": response.status_code, "content": response.text}
 
-    # 在一个单独的线程中运行同步的HTTP请求，以避免阻塞asyncio事件循环
-    result_dict = await asyncio.to_thread(_sync_request_wrapper)
-    
+    except httpx.HTTPStatusError as e:
+        logger.error(f"API请求返回失败的状态码: {e.response.status_code}", exc_info=True)
+        result_dict = {
+            "error": "HTTPStatusError",
+            "status_code": e.response.status_code,
+            "message": f"请求失败，状态码: {e.response.status_code}",
+            "response": e.response.text
+        }
+    except httpx.TimeoutException as e:
+        logger.error(f"API请求超时: {e}", exc_info=True)
+        result_dict = {"error": "TimeoutException", "message": f"请求超时: {e}"}
+    except httpx.RequestError as e:
+        logger.error(f"API请求失败: {e}", exc_info=True)
+        result_dict = {"error": "RequestError", "message": f"请求连接错误: {e}"}
+    except Exception as e:
+        logger.error(f"调用API时发生未知错误: {e}", exc_info=True)
+        result_dict = {"error": "UnknownError", "message": f"发生未知错误: {str(e)}"}
+
     # 将结果字典转换为格式化的JSON字符串，并封装在TextContent中返回
     result_text = json.dumps(result_dict, ensure_ascii=False, indent=2)
     return [TextContent(type="text", text=result_text)]
