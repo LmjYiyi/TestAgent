@@ -5,14 +5,9 @@ import asyncio
 import re
 from typing import TypedDict, List, Optional, Literal
 
-# 将项目根目录添加到sys.path 我识别不到agents包。。。
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-
 from langgraph.graph import StateGraph, END
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.messages import SystemMessage, HumanMessage
-
-
 
 from agents.mcp_agent import get_mcp_agent
 from models.dquestion import get_llm
@@ -39,13 +34,13 @@ class AgentState(TypedDict):
     history: List[str]
     db_schema: Optional[str]
     db_sample_data: Optional[str]
-    current_request_params: Optional[dict]
+    current_request_params: Optional[dict] #请求参数
     last_api_response: Optional[dict]
     api_request_payload: Optional[dict]
 
 
-# --- 全局配置信息 ---
-# 接口信息
+# --- 全局配置信息 --- 
+# 接口信息 目前硬编码。。
 API_INFO = {
     "name": "UniformTeller.qryTellerInfo",
     "chinese_name": "统一认证用户信息查询",
