@@ -1,12 +1,23 @@
 from utils.logger import setup_logger
 from workflows.graph_builder import build_graph
 import asyncio
+import uuid
+
+from utils.db_utils import DatabaseManager
 
 logger = setup_logger(log_level="INFO")
+
 async def run():
     logger.info("============测试案例智能生成助手启动============")
+    thread_id = str(uuid.uuid4())
+    logger.info(f"创建新测试会话，会话ID: {thread_id}")
+    config = {"configurable": {"thread_id": thread_id}}
     # 构建工作流
-    work_graph = build_graph()
+    db_manager = DatabaseManager()
+    await db_manager.initialize()
+    checkpointer = db_manager.get_checkpointer()
+    work_graph = await build_graph(checkpointer=checkpointer)
+
     state = {
         "user_input": "",
         "current_stage": "choose_scene",
@@ -41,7 +52,13 @@ async def run():
         else:
             print("请稍等...")
         # 同步阻塞
-        state = await work_graph.ainvoke(state)
+        state = await work_graph.ainvoke(state,config=config)
 
 if __name__ == '__main__':
-    asyncio.run(run())
+    try:
+        asyncio.run(run())
+    except Exception as e:
+        logger.error(f"测试案例智能生成助手运行异常: {e}")
+    finally:
+        close_checkpointer()
+        logger.info(f"============测试案例智能生成助手结束============")
