@@ -1,13 +1,17 @@
+from langchain_core.runnables.utils import Output
 from langgraph.graph import StateGraph, END
 from langchain_core.prompts import ChatPromptTemplate
 from agents.mcp_agent import get_mcp_agent
 from models.dquestion import get_llm
-from langchain_core.messages import SystemMessage, HumanMessage
 from utils import logger
+from utils.db_utils import DatabaseManager
 import json
-from typing import TypedDict, List, Optional, Literal
+from typing import TypedDict, List, Optional, Literal, Annotated, Sequence
+from langchain_core.messages import SystemMessage,BaseMessage, HumanMessage, AIMessage
+from langgraph.graph.message import add_messages
+from langgraph.checkpoint.base import BaseCheckpointSaver
 
-
+import asyncio 
 # 1. 定义状态结构
 # ----------------------------------
 class AgentState(TypedDict):
@@ -28,9 +32,9 @@ class AgentState(TypedDict):
     error_message: Optional[str]  # 错误信息
     retry_payload: Optional[str]  # 重试的参数
     output: str  # 输出结果，用来标记本次的结束
-    # 两者的区别？
-    history: List[str]  # 历史记录
-    # messages: Annotated[Sequence[BaseMessage], add_messages] # 消息
+    # # 两者的区别？
+    # history: List[str]  # 历史记录
+    messages: Annotated[Sequence[BaseMessage], add_messages] # 消息
 
 
 # memory = MemorySaver()
@@ -71,7 +75,7 @@ def query_scene(state: AgentState) -> AgentState:
         **state,
         "output": output,
         "current_stage": "confirm_scene",
-        "history": state["history"] + [f"助手：{output}"]
+        "messages": [AIMessage(content=output)]
     }
 
 
@@ -94,14 +98,14 @@ def confirm_scene(state: AgentState) -> AgentState:
             "step_results": [],
             "current_stage": "retrieve_steps",
             "output": None,
-            "history": state["history"] + [f"助手：{output}"]  # 追加历史
+            "messages": [AIMessage(content=output)]
         }
     except:
         output = "输入无效，请重新输入编号确认场景。"
         return {
             **state,
             "output": output,
-            "history": state["history"] + [f"助手：{output}"]  # 追加历史
+            "messages": [AIMessage(content=output)]
         }
 
 
@@ -120,7 +124,7 @@ def retrieve_steps(state: AgentState) -> AgentState:
         "origin_step_list": step_list,
         "step_list": None,
         "current_stage": "confirm_steps",
-        "history": state["history"] + [f"助手：{output}"]  # 追加历史
+        "messages": [AIMessage(content=output)]
     }
     # TODO: 如果没查到的处理逻辑
 
@@ -161,7 +165,7 @@ def confirm_steps(state: AgentState) -> AgentState:
         "step_results": [],
         "current_stage": "execute_step",
         "output": None,
-        "history": state["history"] + [f"助手：{output}"]  # 追加历史
+        "messages": [AIMessage(content=output)]
     }
 
 
@@ -196,7 +200,7 @@ async def execute_step(state: AgentState) -> AgentState:
                 "output": None,
                 "pending_action": None,
                 "retry_payload": None,  # 清空
-                "history": state["history"] + [f"助手：{summary}"]  # 追加历史
+                "messages": [AIMessage(content=output)]
             }
         else:
             output = f"步骤{i + 1}：{step} 执行失败：{str(response)}\n请输入“继续”或“停止”，或使用 参数=xxx 格式重试。"
@@ -207,7 +211,7 @@ async def execute_step(state: AgentState) -> AgentState:
                 "pending_action": f"step_{i}_error",
                 "user_confirmed": None,
                 "output": output,
-                "history": state["history"] + [f"助手：{output}"]  # 追加历史
+                "messages": [AIMessage(content=output)]
             }
     except Exception as e:
         # 是不是要在这里加诊断意见？
@@ -218,7 +222,7 @@ async def execute_step(state: AgentState) -> AgentState:
             "pending_action": f"step_{i}_error",
             "user_confirmed": None,
             "output": output,
-            "history": state["history"] + [f"助手：{output}"]  # 追加历史
+            "messages": [AIMessage(content=output)]
         }
 
 
@@ -230,20 +234,23 @@ async def execute_step(state: AgentState) -> AgentState:
 def handle_error(state: AgentState) -> AgentState:
     text = state["user_input"].strip()
     if "停止" in text:
-        return {**state, "user_confirmed": False, "output": "已终止流程。"}
+        output = "已终止流程。"
+        return {**state, "user_confirmed": False, "messages": [AIMessage(content=output)]}
 
     if "继续" in text or text.startswith("参数="):
         retry_payload = text.replace("参数=", "") if "参数=" in text else None
+        output = "收到修复指令，准备重新执行失败步骤。"
         return {
             **state,
             "user_confirmed": True,
             "retry_payload": retry_payload,
-            "output": "收到修复指令，准备重新执行失败步骤。"
+            "messages": [AIMessage(content=output)]
         }
+    output = "未识别的输入，请输入“继续”或“停止”，或使用 参数=xxx 重试。"
     return {
         **state,
         "user_confirmed": None,
-        "output": "未识别的输入，请输入“继续”或“停止”，或使用 参数=xxx 重试。"
+        "messages": [AIMessage(content=output)]
     }
 
 
@@ -256,7 +263,8 @@ def finish(state: AgentState) -> AgentState:
     print(output)
     return {
         **state,
-        "output": output
+        "output": output,
+        "messages": [AIMessage(content=output)]
     }
 
 
@@ -293,9 +301,8 @@ def router(state: AgentState) -> str:
 
 
 # 3. 构建图
-def build_graph():
+async def build_graph(checkpointer: BaseCheckpointSaver)-> "CompiledGraph":
     logger.info("============构建状态图============")
-
     # 构建状态图
     builder = StateGraph(AgentState)
     # 设置节点
@@ -312,20 +319,58 @@ def build_graph():
     builder.add_edge("finish", END)
 
     # 编译图
-    compiler = builder.compile()
+    compiler = builder.compile(checkpointer=checkpointer)
+    logger.info("图创建成功并传入checkpointer")
     return compiler
 
 
+async def main():
+   #测试图是否能编译
+    from utils.db_utils import DatabaseManager
+    db_manager = DatabaseManager()
+    await db_manager.initialize()
+    checkpointer = db_manager.get_checkpointer()
+    work_graph = await build_graph(checkpointer=checkpointer)
+    # state = {
+    #     "user_input": "",
+    #     "current_stage": "choose_scene",
+    #     "pending_action": None,
+    #     "user_confirmed": None,
+    #     "api_list": [],
+    #     "selected_scene": None,
+    #     "origin_step_list": [],
+    #     "step_list": [],
+    #     "current_step": 0,
+    #     "step_outputs": [],
+    #     "step_results": [],
+    #     "error_message": None,
+    #     "retry_payload": None,
+    #     "output": "",
+    #     "history": []
+    # }
+    # # 您的原始状态和循环逻辑现在都在这个异步函数内部
+    # config = {"configurable": {"thread_id": "1234"}} # 别忘了 LangGraph 需要的 config
+    
+    # while True:
+    #     if state.get("output"): # 使用 .get() 更安全
+    #         print(f"\n🤖 {state['output']}")
+
+    #     if "执行完毕" in state.get("output", ""):
+    #         break
+
+    #     user_input = input("你：").strip()
+    #     if user_input.lower() in ["退出", "exit", "quit","q"]:
+    #         print("再见！")
+    #         break
+            
+    #     state["user_input"] = user_input
+        
+    #     # 现在 await 在 async def 函数内部，这是完全正确的
+    #     state = await compiler.ainvoke(state, config)
+
+# 3. 在 if __name__ == '__main__': 中，只做一件事：启动异步事件循环
 if __name__ == '__main__':
-    compiler = build_graph()
-    state = {"user_input": "我想测试查询接口", "history": [], "output": ""}
-    while True:
-        if state["output"]:
-            print(f"\n🤖 {state['output']}")
-
-        if "执行完毕" in state.get("output", ""):
-            break
-
-        user_input = input("你：").strip()
-        state["user_input"] = user_input
-        state = compiler.invoke(state)
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("\n程序被用户中断。")
