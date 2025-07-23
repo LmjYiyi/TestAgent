@@ -1,9 +1,10 @@
 ###起后台服务，直接和前端对接
-### uvicorn run:app --reload --port 8000
+### uvicorn app:app --reload --port 8000
 ###使用的是agent文件夹中的graph作为测试，因为workflows中的build_graph有多个版本，等合并后再用
 
 import asyncio
 from contextlib import asynccontextmanager
+
 
 import json
 from fastapi import FastAPI, Request, HTTPException, Body
