@@ -1,121 +1,142 @@
 ###起后台服务，直接和前端对接
 ### uvicorn run:app --reload --port 8000
+###使用的是agent文件夹中的graph作为测试，因为workflows中的build_graph有多个版本，等合并后再用
 
-
-import os
-import json
 import asyncio
-from fastapi import FastAPI, Request
+from contextlib import asynccontextmanager
+
+import json
+from fastapi import FastAPI, Request, HTTPException, Body
 from fastapi.responses import StreamingResponse
-from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from workflows.graph_builder import build_graph
+from langchain_core.messages import HumanMessage
+from fastapi.middleware.cors import CORSMiddleware
 
-app = FastAPI()
+from api.v1 import conversation as conversation_v1, feedback as feedback_v1
+from utils.db_utils import db_manager
+from utils.logger import setup_logger
+from agent.graph import build_graph
+from fastapi.responses import JSONResponse
 
-# 允许前端跨域访问
+logger = setup_logger('INFO')
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    logger.info("Application startup...")
+    await db_manager.initialize()
+    logger.info("Database initialized.")
+
+    # 构建带有检查点的LangGraph
+    global agent_app
+    agent_app = build_graph(checkpointer=db_manager.get_checkpointer())
+    logger.info("LangGraph Agent built with database checkpointer.")
+
+    yield
+    # Shutdown
+    logger.info("Application shutdown...")
+    await db_manager.close()
+    logger.info("Database connections closed.")
+
+app = FastAPI(lifespan=lifespan)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:8080"],
+    allow_origins=["*"],  # 允许所有来源，生产环境请替换为你的前端地址
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["*"], # 允许所有方法
+    allow_headers=["*"], # 允许所有头部
 )
 
-# ---------- 状态持久化相关 ----------
-def save_state(session_id: str, state: dict):
-    with open(f"state_{session_id}.json", "w", encoding="utf-8") as f:
-        json.dump(state, f, ensure_ascii=False)
+app.include_router(conversation_v1.router, prefix="/api/v1/conversation", tags=["Conversation"])
+app.include_router(feedback_v1.router, prefix="/api/v1/feedback", tags=["Feedback"])
 
-def load_state(session_id: str) -> dict:
-    path = f"state_{session_id}.json"
-    if os.path.exists(path):
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return None
-
-# ---------- SSE 聊天流 ----------
-@app.get("/chat/stream")
-async def chat_stream(request: Request, session_id: str):
-    graph = build_graph()
-
-    # 加载已有状态，如果没有就初始化
-    state = load_state(session_id)
-    if not state:
-        state = {
-            "session_id": session_id,
-            "user_input": "",
-            "history": [],
-            "current_stage": "query_scene",  # 初始阶段
-            "selected_scene": None,
-            "origin_step_list": [],
-            "step_list": [],
-            "current_step": 0,
-            "step_outputs": [],
-            "step_results": [],
-            "pending_action": None,
-            "user_confirmed": None,
-            "error_message": None,
-            "retry_payload": None,
-            "output": ""
-        }
-
-    #每秒检查一次是否有新输入
-    async def event_generator():
-        nonlocal state
-        while state["current_stage"] != "finish":  # 循环限制：当节点当前节点为finish时，则跳出循环
-            if await request.is_disconnected():
-                print("客户端断开连接")
-                return
-            # 如果需要用户交互，就等待用户输入文件
-            if state["output"] is not None:
-                print(f"\n助手：{state['output']}")
-                user_input = await wait_for_user_input_file(session_id)
-                state["user_input"] = user_input
-                print("收到用户输入:", user_input)
-            else:
-                print("请稍等...")
-
-            # 执行图计算
-            state = graph.invoke(state)
-
-            # 持久化状态
-            save_state(session_id, state)
-
-            # 推送给前端
-            yield f"data: {json.dumps(state, ensure_ascii=False)}\n\n"
-
-            # 如果流程结束
-            if state.get("output") and "执行完毕" in state["output"]:
-                return
-
-        yield f"data: {json.dumps({'output': '执行完毕'})}\n\n"
-
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
-
-# ---------- 接收用户输入 ----------
 class ChatRequest(BaseModel):
     message: str
-    session_id: str
 
-@app.post("/chat")
-async def chat(req: ChatRequest):
-    # 将用户输入写入 session 文件，供后台读取
-    with open(f"session_{req.session_id}.txt", "w", encoding="utf-8") as f:
-        f.write(req.message)
-    return {"output": "消息已发送，开始处理..."}
+@app.post("/api/v1/chat/stream/{thread_id}")
+async def chat_stream(thread_id: str, request_body: ChatRequest = Body(...)):
+    user_id = "default-user"  # TODO: 从token中获取真实用户ID
 
-# ---------- 轮询用户输入,每隔一秒轮询一次 ----------
-async def wait_for_user_input_file(session_id: str, timeout: int = 300):
-    path = f"session_{session_id}.txt"
-    waited = 0
-    while waited < timeout:
-        if os.path.exists(path):
-            with open(path, "r", encoding="utf-8") as f:
-                user_input = f.read().strip()
-            os.remove(path)
-            if user_input:
-                return user_input
-        await asyncio.sleep(1)
-        waited += 1
-    return ""
+    try:
+        if thread_id == 'new':
+            logger.info(f"Creating a new conversation for user: {user_id}")
+            new_conv = await db_manager.create_conversation_entry(user_id=user_id)
+            thread_id = new_conv['thread_id']
+            logger.info(f"New conversation created with thread_id: {thread_id}")
+
+        async def event_stream():
+            # 将输入消息封装为LangChain的HumanMessage格式
+            input_message = HumanMessage(content=request_body.message)
+            # 配置，指定可中断的线程ID
+            config = {"configurable": {"thread_id": thread_id}}
+
+            # 使用 astream_events 流式获取事件
+            async for event in agent_app.astream_events({"messages": [input_message]}, config, version="v1"):
+                # 根据事件类型筛选或格式化
+                event_name = event['event']
+                if event_name in ["on_chat_model_stream"]:
+                    chunk = event["data"].get("chunk")
+                    if chunk and hasattr(chunk, 'content'):
+                        yield f"data: {json.dumps({'type': 'chunk', 'content': chunk.content})}\n\n"
+                elif event_name == 'on_tool_end':
+                     yield f"data: {json.dumps({'type': 'tool_result', 'tool_name': event['name'], 'output': event['data'].get('output')})}\n\n"
+            # 发送一个特殊的结束信号
+            yield f"data: {json.dumps({'type': 'end'})}\n\n"
+            # 在流结束后，检查是否需要生成标题
+            asyncio.create_task(check_and_generate_title(thread_id))
+
+        return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+    except Exception as e:
+        logger.error(f"Error in chat stream for thread {thread_id}: {e}", exc_info=True)
+        # 根据thread_id是否已创建来决定返回的消息
+        error_message = f"Failed to process message in conversation {thread_id}."
+        if thread_id == 'new':
+             error_message = "Failed to create a new conversation."
+        return JSONResponse(status_code=500, content={"detail": error_message})
+
+
+async def check_and_generate_title(thread_id: str):
+    try:
+        # 1. 获取对话元数据，检查标题是否已存在
+        conv_meta = await db_manager.get_conversation_meta(thread_id)
+        if conv_meta and conv_meta.get('title') and conv_meta['title'] != 'New Chat':
+            logger.info(f"Conversation {thread_id} already has a title: {conv_meta['title']}")
+            return
+
+        # 2. 获取对话历史
+        checkpoint = await db_manager.get_conversation_checkpoint(thread_id)
+        if not checkpoint or not checkpoint.get('channel_values', {}).get('messages'):
+            logger.info(f"No messages in conversation {thread_id} to generate a title.")
+            return
+
+        messages = checkpoint['channel_values']['messages']
+        # 检查消息数量，例如，在第一轮交互后（1个人类消息，1个AI消息）
+        if len(messages) >= 2:
+            logger.info(f"Generating title for conversation {thread_id}...")
+            # 3. 调用LLM生成标题
+            from langchain_core.prompts import PromptTemplate
+            from models.dquestion import get_title_generation_llm
+
+            prompt = PromptTemplate.from_template(
+                "根据以下对话内容，为其生成一个简洁的、不超过10个字的标题。\n\n对话内容:\n{history}\n\n标题:"
+            )
+            # 使用一个独立的、非流式的模型实例
+            model = get_title_generation_llm()
+            
+            history_str = "\n".join([f"{type(msg).__name__}: {msg.content}" for msg in messages])
+            
+            chain = prompt | model
+            title_response = await chain.ainvoke({"history": history_str})
+            new_title = title_response.content.strip()
+
+            # 4. 更新数据库中的标题
+            if new_title:
+                logger.info(f"Generated title for {thread_id}: '{new_title}'. Updating database.")
+                await db_manager.update_conversation_title(thread_id, new_title)
+            else:
+                logger.warning(f"Failed to generate a valid title for conversation {thread_id}.")
+
+    except Exception as e:
+        logger.error(f"Error generating title for conversation {thread_id}: {e}", exc_info=True)
