@@ -12,7 +12,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from langchain_core.messages import HumanMessage
 from fastapi.middleware.cors import CORSMiddleware
-
+from typing import Optional
 from api.v1 import conversation as conversation_v1, feedback as feedback_v1
 from utils.db_utils import db_manager
 from utils.logger import setup_logger
@@ -52,50 +52,135 @@ app.add_middleware(
 app.include_router(conversation_v1.router, prefix="/api/v1/conversation", tags=["Conversation"])
 app.include_router(feedback_v1.router, prefix="/api/v1/feedback", tags=["Feedback"])
 
+
 class ChatRequest(BaseModel):
+    # 前端直接传递 user_id
+    user_id: str 
+    # thread_id 是可选的。前端不传或传 null，代表是新对话。
+    thread_id: Optional[str] = None
     message: str
 
-@app.post("/api/v1/chat/stream/{thread_id}")
-async def chat_stream(thread_id: str, request_body: ChatRequest = Body(...)):
-    user_id = "default-user"  # TODO: 从token中获取真实用户ID
+# class ChatResponse(BaseModel):
+#     # 无论新旧对话，都必须返回 thread_id，以便前端在下一次请求时可以带上
+#     thread_id: str
+#     # 本次 AI 回复的完整内容
+#     response_message: str
 
+# @app.post("/api/v1/chat/invoke", response_model=ChatResponse)
+# async def unified_chat_invoke(request: ChatRequest = Body(...)):
+#     """
+#     统一的【非流式】聊天接口。
+#     - 如果请求中不包含 thread_id，则创建新对话。
+#     - 如果包含 thread_id，则继续现有对话。
+#     - 返回一次完整的响应。
+#     """
+#     try:
+#         current_thread_id = request.thread_id
+#         is_new_conversation = (current_thread_id is None)
+
+#         # --- 后端核心判断与操作 (与流式接口完全相同) ---
+#         if is_new_conversation:
+#             logger.info(f"thread_id is null, creating new conversation for user: {request.user_id}")
+#             new_conv = await db_manager.create_conversation_entry(request.user_id)
+#             current_thread_id = new_conv['thread_id']
+#             logger.info(f"New conversation created with thread_id: {current_thread_id}")
+#         else:
+#             logger.info(f"Continuing conversation for thread_id: {current_thread_id}")
+#             conv_meta = await db_manager.get_conversation_meta(current_thread_id)
+#             if not conv_meta or conv_meta.get('user_id') != request.user_id:
+#                  raise HTTPException(status_code=404, detail="对话未找到或无权访问。")
+
+#         # --- 调用 LangGraph 的非流式方法 ---
+#         config = {"configurable": {"thread_id": current_thread_id}}
+#         input_message = HumanMessage(content=request.message)
+        
+#         # 使用 .ainvoke() 等待完整的最终状态返回
+#         final_state = await agent_app.ainvoke(
+#             {"messages": [input_message]},
+#             config
+#         )
+
+#         # 异步执行标题生成等收尾工作
+#         asyncio.create_task(check_and_generate_title(current_thread_id))
+
+#         # --- 构造并返回统一的响应体 ---
+#         # 从最终状态中提取最后一条AI消息
+#         response_message_content = ""
+#         if final_state and final_state.get("messages"):
+#             # 找到最后一条 AIMessage
+#             for msg in reversed(final_state["messages"]):
+#                 if msg.type == 'ai':
+#                     response_message_content = msg.content
+#                     break
+        
+#         return UnifiedChatResponse(
+#             thread_id=current_thread_id,
+#             response_message=response_message_content
+#         )
+
+#     except Exception as e:
+#         logger.error(f"Error in unified invoke for request: {request.dict()}: {e}", exc_info=True)
+#         return JSONResponse(status_code=500, content={"detail": "处理消息时发生内部错误。"})
+
+@app.post("/aitest/chat/stream")
+async def chat_stream(request: ChatRequest = Body(...)):
+    """
+    统一的流式聊天接口。
+    - 如果请求中不包含 thread_id，则创建新对话。
+    - 如果包含 thread_id，则继续现有对话。
+    """
     try:
-        if thread_id == 'new':
-            logger.info(f"Creating a new conversation for user: {user_id}")
-            new_conv = await db_manager.create_conversation_entry(user_id=user_id)
-            thread_id = new_conv['thread_id']
-            logger.info(f"New conversation created with thread_id: {thread_id}")
+        current_thread_id = request.thread_id
+        is_new_conversation = (current_thread_id is None)
 
+        # --- 后端核心判断与操作 ---
+        if is_new_conversation:
+            # 1. 创建新对话
+            logger.info(f"thread_id is null, creating new conversation for user: {request.user_id}")
+            # 输入前端传的user_id,调用 db_utils.py 的创建会话函数,返回thread_id
+            new_conv = await db_manager.create_conversation_entry(request.user_id)
+            current_thread_id = new_conv['thread_id']
+            logger.info(f"New conversation created with thread_id: {current_thread_id}")
+        else:
+            # 2. (安全加固) 继续现有对话，验证所有权
+            logger.info(f"Continuing conversation for thread_id: {current_thread_id}")
+            # 调用 db_utils.py 中的获取会话元数据函数判断对话是否属于当前用户
+            conv_meta = await db_manager.get_conversation_meta(current_thread_id)
+            if not conv_meta or conv_meta.get('user_id') != request.user_id:
+                 raise HTTPException(status_code=404, detail="对话未找到或无权访问。")
+
+        # --- 统一的流式处理生成器 ---
         async def event_stream():
-            # 将输入消息封装为LangChain的HumanMessage格式
-            input_message = HumanMessage(content=request_body.message)
-            # 配置，指定可中断的线程ID
-            config = {"configurable": {"thread_id": thread_id}}
+            # 1. 握手事件：如果是新对话，必须先告诉前端新的thread_id
+            if is_new_conversation:
+                init_event = {"type": "init", "thread_id": current_thread_id}
+                yield f"data: {json.dumps(init_event)}\n\n"
 
-            # 使用 astream_events 流式获取事件
+            # 2. 调用真正的异步流式 agent
+            config = {"configurable": {"thread_id": current_thread_id}}
+            input_message = HumanMessage(content=request.message)
+            
+            # 使用在 lifespan 中创建的全局 agent_app
             async for event in agent_app.astream_events({"messages": [input_message]}, config, version="v1"):
-                # 根据事件类型筛选或格式化
                 event_name = event['event']
-                if event_name in ["on_chat_model_stream"]:
+                if event_name == "on_chat_model_stream":
                     chunk = event["data"].get("chunk")
                     if chunk and hasattr(chunk, 'content'):
                         yield f"data: {json.dumps({'type': 'chunk', 'content': chunk.content})}\n\n"
                 elif event_name == 'on_tool_end':
                      yield f"data: {json.dumps({'type': 'tool_result', 'tool_name': event['name'], 'output': event['data'].get('output')})}\n\n"
-            # 发送一个特殊的结束信号
+            
+            # 3. 发送结束信号
             yield f"data: {json.dumps({'type': 'end'})}\n\n"
-            # 在流结束后，检查是否需要生成标题
-            asyncio.create_task(check_and_generate_title(thread_id))
+            
+            # 异步执行标题生成等收尾工作
+            asyncio.create_task(check_and_generate_title(current_thread_id))
 
         return StreamingResponse(event_stream(), media_type="text/event-stream")
 
     except Exception as e:
-        logger.error(f"Error in chat stream for thread {thread_id}: {e}", exc_info=True)
-        # 根据thread_id是否已创建来决定返回的消息
-        error_message = f"Failed to process message in conversation {thread_id}."
-        if thread_id == 'new':
-             error_message = "Failed to create a new conversation."
-        return JSONResponse(status_code=500, content={"detail": error_message})
+        logger.error(f"Error in unified stream for request: {request.dict()}: {e}", exc_info=True)
+        return JSONResponse(status_code=500, content={"detail": "处理消息时发生内部错误。"})
 
 
 async def check_and_generate_title(thread_id: str):
