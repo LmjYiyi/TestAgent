@@ -44,7 +44,64 @@ async def get_user_conversations(
         raise HTTPException(status_code=500, detail="内部服务器错误，无法获取对话列表。")
 
 @router.get("/{thread_id}",
-            summary="加载并显示单个对话的完整内容",
+            summary="加载完整的state",
+            response_model=Dict[str, Any])
+async def get_state(
+    thread_id: str = Path(..., description="对话的唯一线程ID")
+):
+    """
+    根据thread_id从checkpoints表中获取并返回一个对话的完整消息历史记录。
+    """
+    try:
+        logger.info(f"正在为 thread_id {thread_id} 加载state。")
+        checkpoint = await db_manager.get_conversation_checkpoint(thread_id)
+        if not checkpoint:
+            raise HTTPException(status_code=404, detail="state未找到。")
+
+        # LangChain的消息对象需要被序列化为字典
+        state = checkpoint.get("channel_values", {})
+
+        
+        return state
+    except HTTPException as he:
+        # Re-raise HTTPException to preserve status code and detail
+        raise he
+    except Exception as e:
+        logger.error(f"为 thread_id {thread_id} 加载state时出错: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="内部服务器错误，加载state失败。")
+
+@router.get("/state/{thread_id}",
+            summary="获取完整state",
+            response_model=Dict[str, Any])
+async def get_full_state(
+    thread_id: str = Path(..., description="对话的唯一线程ID")
+):
+    """
+    根据thread_id从checkpoints表中获取并返回包含自定义数据的完整对话状态。
+    """
+    try:
+        logger.info(f"正在为 thread_id {thread_id} 获取完整state。")
+        checkpoint = await db_manager.get_conversation_checkpoint(thread_id)
+        if not checkpoint:
+            raise HTTPException(status_code=404, detail="state未找到。")
+
+        # 提取包含自定义数据的channel_values
+        state = checkpoint.get("channel_values", {})
+
+        # 序列化LangChain消息对象和其他可能的非序列化数据
+        if "messages" in state:
+            state["messages"] = [message.dict() for message in state["messages"]]
+
+        return state
+    except HTTPException as he:
+        raise he
+    except Exception as e:
+        logger.error(f"获取 thread_id {thread_id} 的完整state时出错: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="内部服务器错误，获取state失败。")
+
+
+@router.get("/{thread_id}",
+            summary="获取单个对话的历史记录",
             response_model=List[Dict[str, Any]])
 async def get_single_conversation_history(
     thread_id: str = Path(..., description="对话的唯一线程ID")
