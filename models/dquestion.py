@@ -12,8 +12,8 @@ base_url = os.getenv("OPENAI_API_BASE")
 
 def get_llm():
     llm = ChatOpenAI(
-    # model="deepseek-ai/DeepSeek-R1", 
-    model="deepseek-ai/DeepSeek-R1-0528-Qwen3-8B",
+    model="Qwen/QwQ-32B",
+    # model="deepseek-ai/DeepSeek-R1-0528-Qwen3-8B",
     openai_api_key= api_key,
     openai_api_base= base_url,
     temperature = 0.5,
@@ -39,7 +39,7 @@ def get_reranker():
         api_key=api_key,
         base_url=f"{base_url}/rerank",
         model="BAAI/bge-reranker-v2-m3",
-        top_n=5,
+        top_n=20,
         return_documents=True,
     )
     return compressor
