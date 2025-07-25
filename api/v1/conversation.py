@@ -100,7 +100,7 @@ async def get_full_state(
         raise HTTPException(status_code=500, detail="内部服务器错误，获取state失败。")
 
 
-@router.get("/aitest/selectSessionon/{thread_id}",
+@router.get("/aitest/selectSession/{thread_id}",
             summary="获取单个对话的历史记录",
             response_model=List[Dict[str, Any]])
 async def get_single_conversation_history(
