@@ -36,7 +36,30 @@ class AgentState(TypedDict):
     # history: List[str]  # 历史记录
     messages: Annotated[Sequence[BaseMessage], add_messages] # 消息
 
-
+def create_initial_state(user_input: str) -> AgentState:
+    """
+    为新对话创建一个完整且符合AgentState规范的初始状态。
+    这是确保图能够正确启动的关键。
+    """
+    # 这个函数返回一个字典，其中包含了AgentState所需的所有键，并赋予它们初始的“零值”。
+    return AgentState(
+        # 核心输入
+        user_input=user_input,
+        messages=[HumanMessage(content=user_input)],
+        current_stage="query_scene",  
+        pending_action=None,
+        user_confirmed=None,
+        api_list=[],
+        selected_scene=None,
+        origin_step_list=[],
+        step_list=[],
+        current_step=0,
+        step_outputs=[],
+        step_results=[],
+        error_message=None,
+        retry_payload=None,
+        output=""
+    )
 # memory = MemorySaver()
 
 # 2. 定义节点、边函数
