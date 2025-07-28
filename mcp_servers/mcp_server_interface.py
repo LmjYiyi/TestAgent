@@ -112,6 +112,27 @@ async def call_api(url: str, method: str = "POST",
     result_text = json.dumps(result_dict, ensure_ascii=False, indent=2)
     return [TextContent(type="text", text=result_text)]
 
+
+@mcp_app.tool(description="一个用于在Agent内部传递或更新状态的工具。它接收一个JSON对象，并原封不动地返回。当步骤的输出是一个需要在后续步骤中使用的JSON对象（例如，组装好的API请求报文）时，请使用此工具。")
+async def update_state(state_object: Dict[str, Any]) -> List[TextContent]:
+    """
+    接收一个字典（JSON对象）并将其作为字符串返回，用于在Agent的步骤之间传递状态。
+
+    Args:
+        state_object (Dict[str, Any]): 要传递或更新的状态对象。
+
+    Returns:
+        List[TextContent]: 包含输入对象的JSON字符串表示形式的TextContent列表。
+    """
+    logger.info(f"接收到状态更新请求: {state_object}")
+    try:
+        # 将输入的字典转换为JSON字符串
+        result_text = json.dumps(state_object, ensure_ascii=False, indent=2)
+        return [TextContent(type="text", text=result_text)]
+    except TypeError as e:
+        logger.error(f"状态对象无法序列化为JSON: {e}", exc_info=True)
+        error_dict = {"error": "SerializationError", "message": str(e)}
+        return [TextContent(type="text", text=json.dumps(error_dict))]
 def main():
     """主函数，启动MCP服务器"""
     logger.info("启动通用API调用MCP服务器...")
