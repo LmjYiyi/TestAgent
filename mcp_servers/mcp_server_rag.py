@@ -1,5 +1,5 @@
 import sys
-sys.path.append('D:/TCGT')
+sys.path.append('/TCGT')
 # for pth in sys.path:
 #     print(pth)
 
@@ -59,7 +59,7 @@ def load_documents(md_dir: str) -> List[Document]:
             block_meta = extract_star_fields(block)
             full_meta = base_metadata.copy()
             full_meta.update(block_meta)
-            content = re.sub(r"\*\*.+?\*\*\s*:.+\n?", "", block).strip()
+            content = block.strip()
             documents.append(Document(page_content=content, metadata=full_meta))
 
     return documents
@@ -97,64 +97,31 @@ def load_or_create_vectorstore(documents: List[Document], embedding_model, persi
 
 
 # 创建检索器
-def create_retriever(vectorstore, reranker):
+def create_retriever(vectorstore: Chroma, reranker):
     return ContextualCompressionRetriever(
         base_retriever=vectorstore.as_retriever(search_kwargs={
             "filter": {'类型': '接口场景'},  # 根据实际情况构建过滤条件
-            'k': 20
+            'k': 10
         }),
         base_compressor=reranker,  # 重排模型
     )
 
 
-# 创建问答链
-def create_qa_chain(retriever):
-    return RetrievalQA.from_chain_type(
-        llm=dquestion.get_llm(),
-        retriever=retriever,
-        return_source_documents=True,
-    )
+# 直接生成 api_list
+def generate_api_list(documents: List[Document], query: str) -> str:
+    api_list = []
 
+    # 根据用户查询从检索的文档中提取接口信息
+    for doc in documents:
+        metadata = doc.metadata
+        interface_name = metadata.get("接口中文名")
+        scene_name = metadata.get("场景名")
 
-def create_prompt(query: str) -> str:
-    prompt = f"""
-    请严格按照以下规则处理用户查询：
+        if interface_name and scene_name:
+            api_list.append(f'接口中文名: {interface_name}, 场景名: {scene_name}')
 
-    ## 任务目标
-    从检索到的文档中，提取 **metadata 中的「接口中文名」和「场景名」**，生成结构化列表。
-
-    ## 关键约束
-    1. **字段来源唯一**：必须从文档的 `metadata` 字典中提取，**绝对禁止** 使用文档内容（page_content）中的任何文字。
-    2. **字段名固定**：仅提取 `metadata` 中的 `接口中文名` 和 `场景名` 两个字段，忽略其他字段。
-    3. **原始值保留**：直接使用字段的原始值，不增删、不改写任何字符（包括标点符号）。
-    4. **输出格式强制**：
-       - 仅返回一行代码：`api_list = ["接口中文名: <值>, 场景名: <值>", ...]`
-       - 列表项用英文双引号包裹，逗号分隔，无额外空行或解释。
-
-    ## 正确示例
-    输入文档的 metadata：
-    {{
-        "接口中文名": "订单查询",
-        "场景名": "普通订单查询", 
-        "其他字段": "...",
-        "page_content": "用户通过提供订单ID和用户ID进行订单查询..."  # 文档内容（忽略！）
-    }}
-
-    正确输出：
-    api_list = ["接口中文名: 订单查询, 场景名: 普通订单查询"]
-
-    ## 错误示例（必须避免）
-    ❌ 错误1（使用文档内容作为场景名）：
-    api_list = ["接口中文名: 订单查询, 场景名: 用户通过提供订单ID和用户ID进行订单查询"]  # 错误！场景名必须是 metadata 中的「普通订单查询」
-
-    ❌ 错误2（修改字段值）：
-    api_list = ["接口中文名: 订单查询接口, 场景名: 普通查询"]  # 错误！必须保留原始值「订单查询」「普通订单查询」
-
-    ## 你的任务
-    用户查询：{query}
-    请返回符合上述所有要求的结果，不得添加任何额外内容。
-    """
-    return prompt.strip()  # 去除首尾空行，避免格式干扰
+    # 格式化输出 api_list
+    return f'api_list = [{", ".join(api_list)}]'
 
 
 # 主函数，执行查询
@@ -171,7 +138,6 @@ def rag_match(query: str):
     # 加载文档
     md_dir = "../docs/knowledge"
     documents = load_documents(md_dir)
-    # print(documents)
 
     # 初始化嵌入模型
     embedding_model = initialize_embedding_model()
@@ -186,22 +152,21 @@ def rag_match(query: str):
     # 创建检索器
     retriever = create_retriever(vectorstore, reranker)
 
-    # 创建问答链
-    qa_chain = create_qa_chain(retriever)
+    # 使用 invoke() 获取与查询相关的文档
+    relevant_docs = retriever.invoke(query)
 
-    prompt = create_prompt(query)
-
-    # 提问并输出结果
-    answer = qa_chain.invoke({"query": prompt})
+    # 生成 API 列表
+    api_list = generate_api_list(relevant_docs, query)
 
     print(f"\n❓ 问题：{query}")
 
-    return answer
+    return api_list
 
 
 if __name__ == '__main__':
     mcp.run(transport="stdio")
 # if __name__ == "__main__":
-#     user_query = "我想要订单查询相关的所有场景列表"
-#     answer = rag_match(user_query)
-#     print(answer['result'])
+#     user_query = "我想要注册相关的所有场景列表"
+#     api_list = rag_match(user_query)
+#     print(f"\n🔍 检索到的相关 API 列表:\n{api_list}")
+

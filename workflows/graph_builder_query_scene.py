@@ -45,21 +45,21 @@ async def query_scene_from_tool(query: str) -> List[str]:
             query = {"query": query}
             tool_result = await client.call_tool('rag_match', query)
 
-            # 3. 检查调用是否成功
-            if tool_result.is_error:
-                raise RuntimeError(f"工具调用失败: {tool_result.content}")
+            # 提取原始字符串
+            raw_text = tool_result.content[0].text.strip()
 
-            # 4. 提取结构化结果
-            result_content = tool_result.structured_content["result"]
-            if not result_content or "api_list = [" not in result_content:
-                raise ValueError(f"工具返回格式错误: {result_content}")
+            # 去掉前缀 `api_list = [` 和末尾 `]`
+            if raw_text.startswith("api_list = [") and raw_text.endswith("]"):
+                raw_text = raw_text[len("api_list = ["):-1].strip()
 
-            # 5. 解析 api_list（从字符串提取列表）
-            list_start = result_content.find("[")
-            list_end = result_content.rfind("]") + 1
-            list_str = result_content[list_start:list_end]
-            api_list = ast.literal_eval(list_str)  # 安全解析字符串为列表
-
+            # 用逗号拆分并组合成一项一项的字符串
+            items = []
+            parts = raw_text.split(", ")
+            for i in range(0, len(parts), 2):
+                if i + 1 < len(parts):
+                    item = f'{parts[i]}, {parts[i + 1]}'
+                    items.append(item)
+            api_list = items
             return api_list
 
     except Exception as e:
