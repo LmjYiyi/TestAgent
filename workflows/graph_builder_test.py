@@ -539,7 +539,7 @@ def build_graph():
 
 # --- 主程序运行逻辑 ---
 async def main():
-    # 不使用复杂的图结构，直接使用简单的状态机
+
     state = {
         "user_input": "",
         "current_stage": "query_scene",
