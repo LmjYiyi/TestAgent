@@ -29,11 +29,11 @@ async def get_mcp_agent():
                     "args": ["mcp_servers/mcp_server_math.py"],
                     "transport": "stdio",
                 },
-                # # 远程服务，需要启起来
-                # "weather": {
-                #     "url": "http://127.0.0.1:8000/sse",
-                #     "transport": "sse",
-                # }
+                # 远程服务，需要启起来
+                "weather": {
+                    "url": "http://127.0.0.1:8000/sse",
+                    "transport": "sse",
+                }
             }
         )
 

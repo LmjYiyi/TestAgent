@@ -11,25 +11,13 @@ api_key = os.getenv("OPENAI_API_KEY")
 base_url = os.getenv("OPENAI_API_BASE")
 
 def get_llm():
-    """获取用于主对话的大模型"""
     llm = ChatOpenAI(
     model="Qwen/QwQ-32B",
     # model="deepseek-ai/DeepSeek-R1-0528-Qwen3-8B",
-    model="deepseek-ai/DeepSeek-R1-0528-Qwen3-8B",
     openai_api_key= api_key,
     openai_api_base= base_url,
     temperature = 0.5,
     streaming=True)
-    return llm
-
-def get_title_generation_llm():
-    """获取用于生成对话标题的小模型"""
-    llm = ChatOpenAI(
-    model="deepseek-ai/DeepSeek-V2-Lite",
-    openai_api_key= api_key,
-    openai_api_base= base_url,
-    temperature = 0.3,
-    streaming=False)
     return llm
 
 def get_embedding():
