@@ -7,7 +7,7 @@ from typing import Optional, Any, Dict, List
 import json
 import asyncio
 
-from langchain_core.messages import HumanMessage, AIMessage
+from langchain_core.messages import HumanMessage, AIMessage, BaseMessage
 from langchain_core.prompts import PromptTemplate
 
 from utils.logger import setup_logger
@@ -66,22 +66,20 @@ async def chat_stream(fastapi_req: Request, request: ChatRequest = Body(...)):
                 
                 if kind == "on_chain_end":
                     node_name = event["name"]
-                    output_data = event.get("data", {}).get("output")
-                    
-                    if isinstance(output_data, dict):
-                        # 1. 优先尝试从 'output' 字段获取要流式传输的内容
-                        content_to_stream = output_data.get("output")
-                        
-                        # 2. 如果 'output' 字段为空，尝试从 messages 列表获取最后一条 AI 消息
-                        if not content_to_stream:
-                            messages = output_data.get("messages", [])
-                            if messages and isinstance(messages[-1], AIMessage):
-                                content_to_stream = messages[-1].content
-                        
-                        # 3. 只有在确定有内容要发送时才 yield
-                        if content_to_stream:
-                            logger.info(f"Streaming output from node '{node_name}': {content_to_stream}")
-                            yield f"data: {json.dumps({'type': 'chunk', 'content': content_to_stream})}\n\n"
+                    if node_name not in ["LangGraph", "__start__", "router"]:
+                        output_data = event.get("data", {}).get("output")
+                        # print("output_data",output_data)
+                        if isinstance(output_data, dict):
+                            if "messages" in output_data and isinstance(output_data["messages"], list):
+                                # 直接将列表中的 BaseMessage 对象原地转换为字典
+                                output_data["messages"] = [
+                                    {"role": msg.type, "content": msg.content} 
+                                    for msg in output_data["messages"] 
+                                    if isinstance(msg, BaseMessage)
+                                ]
+                            logger.info(f"Streaming state update from node '{node_name}'")
+                            yield f"data: {json.dumps({'type': 'state', 'node': node_name, 'payload': output_data})}\n\n"
+    
             
             # 循环结束后，检查图的最终状态 
             final_state = await work_graph_app.aget_state(config)
