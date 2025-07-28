@@ -1,5 +1,6 @@
 # 文件路径: api/v1/chat.py
 
+from sched import Event
 from fastapi import APIRouter, HTTPException, Body, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
@@ -7,12 +8,12 @@ from typing import Optional, Any, Dict, List
 import json
 import asyncio
 
-from langchain_core.messages import HumanMessage, AIMessage
+from langchain_core.messages import HumanMessage, AIMessage,BaseMessage
 from langchain_core.prompts import PromptTemplate
 
 from utils.logger import setup_logger
 from utils.db_utils import db_manager
-from models.dquestion import get_title_generation_llm
+from models.dquestion import get_llm
 
 from workflows.graph_builder import AgentState, create_initial_state
 
@@ -61,27 +62,35 @@ async def chat_stream(fastapi_req: Request, request: ChatRequest = Body(...)):
 
             async for event in work_graph_app.astream_events(initial_input, config, version="v2"):
                 # print(f"\n[EVENT RECEIVED] ==> {event}\n") 
-
+                #event结构
                 kind = event["event"]
                 
                 if kind == "on_chain_end":
                     node_name = event["name"]
-                    output_data = event.get("data", {}).get("output")
-                    
-                    if isinstance(output_data, dict):
-                        # 1. 优先尝试从 'output' 字段获取要流式传输的内容
-                        content_to_stream = output_data.get("output")
-                        
-                        # 2. 如果 'output' 字段为空，尝试从 messages 列表获取最后一条 AI 消息
-                        if not content_to_stream:
-                            messages = output_data.get("messages", [])
-                            if messages and isinstance(messages[-1], AIMessage):
-                                content_to_stream = messages[-1].content
-                        
-                        # 3. 只有在确定有内容要发送时才 yield
-                        if content_to_stream:
-                            logger.info(f"Streaming output from node '{node_name}': {content_to_stream}")
-                            yield f"data: {json.dumps({'type': 'chunk', 'content': content_to_stream})}\n\n"
+                    if node_name not in ["LangGraph", "__start__", "router"]:
+                        event_data = event.get("data", {})
+                
+                        if isinstance(event_data, dict):
+                            # 创建一个列表，包含所有可能含有 messages 的部分
+                            parts_to_clean = []
+                            if "input" in event_data and isinstance(event_data["input"], dict):
+                                parts_to_clean.append(event_data["input"])
+                            if "output" in event_data and isinstance(event_data["output"], dict):
+                                parts_to_clean.append(event_data["output"])
+
+                            # 遍历这些部分，对它们各自的 messages 列表进行清洗
+                            for part in parts_to_clean:
+                                if "messages" in part and isinstance(part["messages"], list):
+                                        part["messages"] = [
+                                            {"role": msg.type, "content": msg.content} 
+                                            for msg in part["messages"] 
+                                            if isinstance(msg, BaseMessage)
+                                        ]
+                            
+                            logger.info(f"Streaming state update from node '{node_name}:{event_data}'") 
+                            
+                            # 4. 现在，整个 event_data 对象都已经是可序列化的了
+                            yield f"data: {json.dumps({'type': 'state', 'node': node_name, 'payload': event_data})}\n\n"
             
             # 循环结束后，检查图的最终状态 
             final_state = await work_graph_app.aget_state(config)
