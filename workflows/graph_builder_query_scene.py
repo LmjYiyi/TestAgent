@@ -4,6 +4,7 @@ from langgraph.graph.message import add_messages
 import ast
 from fastmcp import Client
 import asyncio
+from utils import logger
 
 
 # ========================
@@ -38,10 +39,13 @@ async def query_scene_from_tool(query: str) -> List[str]:
     :param query: 用户查询（如"我想要用户注册接口相关的所有场景列表"）
     :return: 接口场景列表（如 ["接口中文名: 用户注册, 场景名: 普通注册", ...]）
     """
+    logger.info("正在调用 FastMCP-RAG 工具...")
+    print(f"用户输入：{query}")
     try:
         # 1. 连接 FastMCP 服务端
-        async with Client("../mcp_servers/mcp_server_rag.py") as client:
+        async with Client("mcp_servers/mcp_server_rag.py") as client:
             # 2. 调用 rag_match 工具
+            print("正在调用 rag_match 工具...")
             query = {"query": query}
             tool_result = await client.call_tool('rag_match', query)
 
@@ -70,12 +74,13 @@ async def query_scene_from_tool(query: str) -> List[str]:
 # ========================
 # 3. 状态处理函数（集成工具调用）
 # ========================
-async def query_scene(state: AgentState) -> AgentState:
+async def query_scene2(state: AgentState) -> AgentState:
     """
     处理"查询接口场景"阶段的状态流转
     :param state: 当前状态（包含 user_input 等）
     :return: 更新后的状态（包含 api_list 和 output）
     """
+    logger.info("===开始调用获取接口场景列表接口===")
     try:
         # 1. 调用异步工具获取接口场景列表
         api_list = await query_scene_from_tool(state["user_input"])
@@ -135,7 +140,7 @@ def main():
 
     # 2. 执行异步查询（通过事件循环）
     loop = asyncio.get_event_loop()
-    updated_state = loop.run_until_complete(query_scene(initial_state))  # 执行异步函数
+    updated_state = loop.run_until_complete(query_scene2(initial_state))  # 执行异步函数
 
     # 3. 打印结果（模拟 LangGraph 流程输出）
     print("\n===== 流程执行结果 =====")

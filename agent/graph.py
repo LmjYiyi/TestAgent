@@ -6,7 +6,6 @@ from typing import Annotated, TypedDict, List
 from langchain_core.messages import BaseMessage, HumanMessage
 from models.dquestion import get_llm
 from langgraph.graph import StateGraph, END
-
 from utils.logger import setup_logger
 from utils.db_utils import db_manager
 
@@ -16,10 +15,8 @@ logger = setup_logger()
 class AgentState(TypedDict):
     messages: Annotated[List[BaseMessage], operator.add]
 
-
 def call_model(state):
     messages = state["messages"]
-    # 在这里替换为你的模型，例如从配置中加载
     model = get_llm()
     response = model.invoke(messages)
     # 我们只返回响应，而不是整个状态，以便流式处理
@@ -48,7 +45,7 @@ logger.info("LangGraph Agent workflow defined.")
 if __name__ == '__main__':
     
     async def run_example():
-        from langgraph.checkpoint.aiomysql import AIOMySQLSaver
+        from langgraph.checkpoint.mysql.aio import AIOMySQLSaver
         from utils.db_utils import db_manager
 
         await db_manager.initialize()

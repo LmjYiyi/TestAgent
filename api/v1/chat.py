@@ -90,7 +90,7 @@ async def chat_stream(fastapi_req: Request, request: ChatRequest = Body(...)):
                             logger.info(f"Streaming state update from node '{node_name}:{event_data}'") 
                             
                             # 4. 现在，整个 event_data 对象都已经是可序列化的了
-                            yield f"data: {json.dumps({'type': 'state', 'node': node_name, 'payload': event_data})}\n\n"
+                            yield f"data: {json.dumps({'type': 'state', 'node': node_name, 'payload': event_data},ensure_ascli=False)}\n\n"
             
             # 循环结束后，检查图的最终状态 
             final_state = await work_graph_app.aget_state(config)

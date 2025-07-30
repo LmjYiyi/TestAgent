@@ -4,7 +4,7 @@
 
 import asyncio
 from contextlib import asynccontextmanager
-
+import uvicorn
 
 import json
 from fastapi import FastAPI, Request, HTTPException, Body
@@ -16,7 +16,7 @@ from typing import Optional
 from api.v1 import conversation as conversation_v1, feedback as feedback_v1,chat as chat_v1
 from utils.db_utils import db_manager
 from utils.logger import setup_logger
-from agent.graph import build_graph, workflow
+# from agent.graph import build_graph, workflow
 from fastapi.responses import JSONResponse
 from workflows.graph_builder import build_graph
 logger = setup_logger('INFO')
@@ -56,8 +56,11 @@ app.include_router(conversation_v1.router, prefix="/api/v1/conversation", tags=[
 app.include_router(feedback_v1.router, prefix="/api/v1/feedback", tags=["Feedback"])
 app.include_router(chat_v1.router, prefix="/api/v1/chat", tags=["Chat"])
 
+def main():
+    uvicorn.run(app, host="127.0.0.1", port=8005)
 
-
+if __name__ == '__main__':
+    main()
 
 
 

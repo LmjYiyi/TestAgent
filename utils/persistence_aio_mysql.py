@@ -35,10 +35,10 @@ async def get_checkpointer() -> BaseCheckpointSaver:
         # 1. 从环境变量获取连接参数
         db_config = {
             "host": os.getenv("MYSQL_HOST", "localhost"),
-            "port": int(os.getenv("MYSQL_PORT", 3308)), # 您的端口是 3308
+            "port": int(os.getenv("MYSQL_PORT", 3306)), # 您的端口是 3308
             "user": os.getenv("MYSQL_USER", "root"),
-            "password": os.getenv("MYSQL_PASSWORD", "1234"),
-            "db": os.getenv("MYSQL_DATABASE", "langgraph_db"),
+            "password": os.getenv("MYSQL_PASSWORD", "123456"),
+            "db": os.getenv("MYSQL_DATABASE", "test"),
             "autocommit": True # 根据库的文档，推荐设置
         }
 

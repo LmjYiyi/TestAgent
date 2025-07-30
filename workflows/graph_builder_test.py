@@ -12,7 +12,7 @@ from langgraph.graph import StateGraph, END
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.messages import SystemMessage, HumanMessage
 
-from agents.mcp_agent_test import get_mcp_agent
+from agents.mcp_agent import get_mcp_agent
 from models.dquestion import get_llm
 from utils import logger
 from workflows.api_scene import TEST_SCENARIOS, get_scenario_steps, get_scenario_by_name
@@ -197,13 +197,17 @@ async def execute_step(state: AgentState) -> AgentState:
 1.  **执行数据库描述**:
     - **你的唯一指令**: 你 **必须** 调用 `run_sql_query` 工具，查询 `teller_info` 表的结构。
     - **工具输入示例**: `{"query": "DESCRIBE teller_info;"}`
+    - **要求**：如果没有找到这个表或者其他失败的情况，请返回一个错误消息，不要再继续执行了。
 2.  **执行数据查询**:
     - **你的唯一指令**: 在上一步成功获取表结构后，你 **必须** 调用 `run_sql_query` 工具，根据 `场景定义` 中的 `ssic_type` 和 `ssic_id` 查询 `teller_info` 表中的数据。
     - **工具输入示例**: `{"query": "SELECT * FROM teller_info WHERE ssic_type = '3' AND ssic_id = 'B234567(8)' LIMIT 1;"}` (请根据实际场景定义中的值替换 `ssic_type` 和 `ssic_id`)
+    - **要求**：如果这一步失败，请返回一个错误消息，不要再继续执行了。
 3.  **保存测试数据**:
     - **你的唯一指令**: 在上一步成功查询到数据后，你 **必须** 调用 `update_state` 工具，将查询到的数据保存到状态中。
     - **工具输入示例**: `{"state_object": {"test_data": [<你从数据库查询到的数据>]}}`
+    - **要求**：如果这一步失败，请返回一个错误消息和目前执行得到的结果，不要再继续执行了。
 - **禁止**: 在没有先执行 `DESCRIBE` 的情况下，直接执行 `SELECT` 查询。
+- **禁止**: 禁止随意发挥、自由发挥，必须按照上述步骤进行，若无法执行，请如实将错误结果返回。
 - **重要提示**: 确保严格按照顺序执行上述工具调用。
 """
     elif i == 1: # 步骤二

@@ -42,10 +42,10 @@ class DatabaseManager:
         try:
             db_config = {
                 "host": os.getenv("MYSQL_HOST", "localhost"),
-                "port": int(os.getenv("MYSQL_PORT", 3308)),
+                "port": int(os.getenv("MYSQL_PORT", 3306)), 
                 "user": os.getenv("MYSQL_USER", "root"),
-                "password": os.getenv("MYSQL_PASSWORD", "1234"),
-                "db": os.getenv("MYSQL_DATABASE", "langgraph_db"),
+                "password": os.getenv("MYSQL_PASSWORD", "123456"),
+                "db": os.getenv("MYSQL_DATABASE", "test"),
                 "autocommit": True
             }
             self._pool = await aiomysql.create_pool(**db_config)
