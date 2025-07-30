@@ -88,7 +88,7 @@ mcp_app = FastMCP(
     instructions="基于MCP协议的MySQL数据库查询服务",
     session_handler=session_handler,
     host=os.getenv("MYSQL_MCP_HOST", "127.0.0.1"),
-    port=int(os.getenv("MYSQL_MCP_PORT", "8000")),
+    port=int(os.getenv("MYSQL_MCP_PORT", "8003")),
     sse_path="/sse"
 )
 
