@@ -189,7 +189,7 @@ TEST_SCENARIOS = {
             }
         },
         "steps": [
-            "步骤一：准备测试数据。确定交易地区`trx_zoneno`为200，转账金额`transfer_amount`为1.00。在`credit_card_account`表查找开卡地区为200，且`usable_amount`（可用余额）大于`transfer_amount`的信用卡，获取其`card_no`（卡号）和`person_name`（户名）作为测试数据。",
+            "步骤一：准备测试数据。确定交易地区`trx_zoneno`为200，转账金额`transfer_amount`为1.00。在`credit_card_account`表查找开卡地区为200，且`usable_amount`（可用余额）大于`transfer_amount`的信用卡，获取其`card_no`（卡号），`person_name`（户名）和`usable_amount`（可用余额）作为测试数据。",
             "步骤二：构造请求报文。将步骤一中准备的数据填充至请求报文模板'request_payload'当中，生成最终的API请求。",
             "步骤三：执行API调用。使用构造好的请求报文，向`CreditCardService.transferPay`接口发送POST请求。",
             "步骤四：校验与断言。验证API响应的HTTP状态码为200，`return_code`为'0'，表示交易成功。同时，查询`credit_card_account`表，对比交易前后`usable_amount`的差值是否等于`transfer_amount`。"
@@ -249,7 +249,7 @@ TEST_SCENARIOS = {
             }
         },
         "steps": [
-            "步骤一：准备测试数据。在`credit_card_account`表中，查找一张开卡地区不为200，且`usable_amount`（可用余额）大于`transfer_amount`=1.00的信用卡，获取其`card_no`（卡号）和`person_name`（户名），作为测试数据",
+            "步骤一：准备测试数据。在`credit_card_account`表中，查找一张开卡地区不为200，且`usable_amount`（可用余额）大于`transfer_amount`=1.00的信用卡，获取其`card_no`（卡号）和`person_name`（户名），`usable_amount`（可用余额）作为测试数据。",
             "步骤二：构造请求报文。确定交易地区`trx_zoneno`为200，`chk_local_flag`（是否支持异地卡处理标志）为1，转账金额`transfer_amount`为1.00。并且将步骤一中准备的数据填充至请求报文模板'request_payload'当中，生成最终的API请求。",
             "步骤三：执行API调用。使用构造好的请求报文，向`CreditCardService.transferPay`接口发送POST请求。",
             "步骤四：校验与断言。验证API响应的HTTP状态码为200，`return_code`为'0'，表示交易成功。同时，查询`credit_card_account`表，对比交易前后`usable_amount`的差值是否等于`transfer_amount`。"
@@ -309,10 +309,10 @@ TEST_SCENARIOS = {
             }
         },
         "steps": [
-            "步骤一：准备测试数据。在`credit_card_account`表中，查找一张`usable_amount`（可用余额）大于`transfer_amount`=1.00的信用卡，获取其`card_no`（卡号）和`person_name`（户名），作为测试数据",
+            "步骤一：准备测试数据。在`credit_card_account`表中，查找一张`usable_amount`（可用余额）大于`transfer_amount`=1.00的信用卡，获取其`card_no`（卡号）和`person_name`（户名），`usable_amount`（可用余额）作为测试数据。",
             "步骤二：构造请求报文。确定外币币种`transfer_currency`为840(USD)，`transfer_currency_type`（转账币种类型）为1，转账金额`transfer_amount`为1.00。并且将步骤一中准备的数据填充至请求报文模板'request_payload'当中，生成最终的API请求。",
             "步骤三：执行API调用。使用构造好的请求报文，向`CreditCardService.transferPay`接口发送POST请求。",
-            "步骤四：校验与断言。验证API响应的HTTP状态码为200，`return_code`为'0'，表示交易成功。同时，查询`credit_card_account`表，对比交易前后`usable_amount`的差值是否等于`transfer_amount`。"
+            "步骤四：校验与断言。验证API响应的HTTP状态码为200，`return_code`为'0'，表示交易成功。同时，查询`credit_card_account`表，对比交易前后`usable_amount`的差值是否等于`transfer_amount`+手续费（`transfer_amount`的1.5%）。"
         ]
     },
     "信用卡转账支付-场景分支4-收取手续费分支": {
@@ -369,8 +369,8 @@ TEST_SCENARIOS = {
             }
         },
         "steps": [
-            "步骤一：准备测试数据。在`credit_card_account`表中，查找一张开卡地区不为200，`usable_amount`（可用余额）大于`transfer_amount`=10.00的信用卡，获取其`card_no`（卡号）和`person_name`（户名），作为测试数据",
-            "步骤二：构造请求报文。确定手续费类型`fee_type`为1(异地手续费)，交易地区`trx_zoneno`为200，转账金额`transfer_amount`为10.00，并且将步骤一中准备的数据填充至请求报文模板'request_payload'当中，生成最终的API请求。",
+            "步骤一：准备测试数据。在`credit_card_account`表中，查找一张开卡地区不为200，`usable_amount`（可用余额）大于`transfer_amount`=10.00的信用卡，获取其`card_no`（卡号）和`person_name`（户名），`usable_amount`（可用余额）作为测试数据。",
+            "步骤二：构造请求报文。确定手续费类型`fee_type`为1(异地手续费)，交易地区`trx_zoneno`为200，转账金额`transfer_amount`为10.00。并且将步骤一中准备的数据填充至请求报文模板'request_payload'当中，生成最终的API请求。",
             "步骤三：执行API调用。使用构造好的请求报文，向`CreditCardService.transferPay`接口发送POST请求。",
             "步骤四：校验与断言。验证API响应的HTTP状态码为200，`return_code`为'0'，表示交易成功。同时，查询`credit_card_account`表，对比交易前后`usable_amount`的差值是否等于`transfer_amount`+手续费（手续费为5元和转账金额的1%两者的最大值） 也就是可用金额前后差值=转账金额+手续费。"
         ]
@@ -422,8 +422,8 @@ TEST_SCENARIOS = {
             "data": None
         },
         "steps": [
-            "步骤一：准备测试数据。在`credit_card_account`表中，查找一张`usable_amount`（可用余额）不足以完成`transfer_amount` = 10.00的信用卡，获取其`card_no`（卡号）和`person_name`（户名），作为测试数据",
-            "步骤二：构造请求报文。设置`over_flag`（透支标志）为0(不透支)，转账金额`transfer_amount`为10.00，并且将步骤一中准备的数据填充至请求报文模板'request_payload'当中，生成最终的API请求。",
+            "步骤一：准备测试数据。在`credit_card_account`表中，查找一张`usable_amount`（可用余额）不足以完成`transfer_amount` = 10.00的信用卡，获取其`card_no`（卡号）和`person_name`（户名），`usable_amount`（可用余额）作为测试数据。",
+            "步骤二：构造请求报文。设置`over_flag`（透支标志）为0(不透支)，转账金额`transfer_amount`为10.00。并且将步骤一中准备的数据填充至请求报文模板'request_payload'当中，生成最终的API请求。",
             "步骤三：执行API调用。使用构造好的请求报文，向`CreditCardService.transferPay`接口发送POST请求。",
             "步骤四：校验与断言。验证API响应的HTTP状态码为200，`return_code`为'ERR1001'，`return_msg`为'余额不足'，表示交易失败。同时，查询`credit_card_account`表，验证`usable_amount`未发生变化，确认交易未执行。"
         ]
@@ -485,8 +485,8 @@ TEST_SCENARIOS = {
             }
         },
         "steps": [
-            "步骤一：准备测试数据。在`credit_card_account`表中，查找一张状态正常的信用卡，获取其`card_no`（卡号）、`card_pin`（密码）和`card_expired_date`（过期时间），`card_no`（卡号）和`person_name`（户名），作为测试数据",
-            "步骤二：构造请求报文。设置`card_pin_chk_flag`（卡密码检查标志）为1，`card_expired_flag`（卡片有效期检查标志）为1，转账金额`transfer_amount`为1.00，并且将步骤一中准备的数据填充至请求报文模板'request_payload'当中，生成最终的API请求。",
+            "步骤一：准备测试数据。在`credit_card_account`表中，查找一张状态正常的信用卡，获取其`card_no`（卡号）、`card_pin`（密码）和`card_expired_date`（过期时间），`card_no`（卡号），`usable_amount`（可用余额）和`person_name`（户名），作为测试数据。",
+            "步骤二：构造请求报文。设置`card_pin_chk_flag`（卡密码检查标志）为1，`card_expired_flag`（卡片有效期检查标志）为1，转账金额`transfer_amount`为1.00。并且将步骤一中准备的数据填充至请求报文模板'request_payload'当中，生成最终的API请求。",
             "步骤三：执行API调用。使用构造好的请求报文，向`CreditCardService.transferPay`接口发送POST请求。",
             "步骤四：校验与断言。验证API响应的HTTP状态码为200，`return_code`为'0'，表示交易成功。同时，查询`credit_card_account`表，对比交易前后`usable_amount`的差值是否等于`transfer_amount`。"
         ]
@@ -547,8 +547,8 @@ TEST_SCENARIOS = {
             }
         },
         "steps": [
-            "步骤一：准备测试数据。在`credit_card_account`表中，查找一张状态正常的卡，获取其`card_no`（卡号）获取用户`person_name`（姓名）、`cer_type`（证件类型）和`cer_no`（证件号码）。作为测试数据",
-            "步骤二：构造请求报文。设置`cer_chk`（证件检查标志）为1，转账金额`transfer_amount`为1.00，并且将步骤一中准备的数据填充至请求报文模板'request_payload'当中，生成最终的API请求。",
+            "步骤一：准备测试数据。在`credit_card_account`表中，查找一张状态正常的卡，获取其`card_no`（卡号）获取用户`person_name`（姓名）、`cer_type`（证件类型）和`cer_no`（证件号码），`usable_amount`（可用余额）。作为测试数据。",
+            "步骤二：构造请求报文。设置`cer_chk`（证件检查标志）为1，转账金额`transfer_amount`为1.00。并且将步骤一中准备的数据填充至请求报文模板'request_payload'当中，生成最终的API请求。",
             "步骤三：执行API调用。使用构造好的请求报文，向`CreditCardService.transferPay`接口发送POST请求。",
             "步骤四：校验与断言。验证API响应的HTTP状态码为200，`return_code`为'0'，表示交易成功。同时，查询`credit_card_account`表，对比交易前后`usable_amount`的差值是否等于`transfer_amount`。"
         ]
