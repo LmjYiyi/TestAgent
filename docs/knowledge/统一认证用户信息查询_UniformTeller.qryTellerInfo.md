@@ -1,0 +1,203 @@
+# 接口基本信息  =======全局参数  
+**应用**:统一认证
+**接口名**:UniformTeller.qryTellerInfo
+**接口中文名**:统一认证用户信息查询
+**URL**:http:/localhost:8080/api/aam/uniformteller/qrytellerInfo/V1
+**版本号**:V1
+
+---
+
+# 通用请求参数  
+**类型**:通用请求参数
+
+| 参数名         | 类型     | 是否必输 | 描述           | 示例值           |
+|----------------|----------|-----------|----------------|------------------|
+| X-Request-App  | string   | 是        | 请求应用名     | F-CCPS           |
+| X-Request-Id   | string   | 是        | 请求应用号     | 2010434          |
+| ssicType       | string   | 是        | 认证类型 (1:统一认证号, 2:身份证, 3:香港身份证) | 1                |
+| ssicId         | string   | 是        | 认证ID         | 392201198902121234 |
+| username       | string   | 是        | 用户名         | john.doe         |
+| email          | string   | 是        | 邮箱           | user@example.com |
+| phone          | string   | 是        | 手机号         | +8613812345678   |
+| biz_content    | object   | 是        | 业务内容       | -                |
+| ├─ serviceName | string   | 是        | 服务名         | AAM              |
+| ├─ randomKey   | string   | 是        | 随机密钥       | smxxxxxxxxsm4    |
+| └─ timestamp   | string   | 是        | 时间戳         | 2019-07-01 09:01:01 |
+
+---
+
+# 通用响应参数  
+**类型**:通用响应参数
+
+| 参数名      | 类型   | 是否必输 | 描述             | 示例值         |
+|-----------|------|--------|----------------|--------------|
+| return_code | string | 是      | 返回码，成功返回0，失败返回非0 | 0            |
+| return_msg  | string | 是      | 返回信息         | 请求处理成功     |
+| data        | object | 否      | 返回对象         | --           |
+| ├─ field1    | string | 是      | 信息1            | 示例信息值     |
+| ├─ field2    | object | 否      | 信息2            | --           |
+| │  ├─ sub_field1 | int    | 是      | 子信息1          | 100          |
+| │  └─ sub_field2 | bool   | 否      | 子信息2          | true         |
+| └─ field3    | string | 是      | 信息3            | 另一示例值     |
+
+---
+
+# 接口场景  
+**类型**:接口场景
+**场景名**:验证统一认证号分支
+**关键词**:查询, 统一认证号, 用户信息
+
+
+场景描述：
+测试 `ssicType` 为 "1" (统一认证号) 的认证结果。
+
+**relevant_tables**:
+teller_info
+
+**request_payload**:
+```json
+{
+  "url": "http://localhost:8080/api/aam/uniformteller/qrytellerInfo/V1",
+  "method": "POST",
+  "headers": {
+    "X-Request-App": "F-CCPS",
+    "X-Request-Id": "2010434"
+  },
+  "json_body": {
+    "ssicType": "1",
+    "ssicId": "123456789",
+    "username": "xx",
+    "email": "zhangsan@example.com",
+    "phone": "13800138001",
+    "biz_content": {
+      "serviceName": "AAM",
+      "randomKey": "smxxxxxxxxsm4",
+      "timestamp": "2019-07-01 09:01:01"
+    }
+  }
+}
+```
+
+**expected_response**:
+```json
+{
+  "return_code": "0",
+  "data": {
+    "field1": "统一认证用户-123456789"
+  }
+}
+```
+
+步骤：  
+1. 步骤一：准备测试数据。根据测试场景，查询并准备`ssicType`为 '1' 的用户数据作为前置条件。
+2. 步骤二：构造请求报文。将步骤一中准备的数据填充至请求报文模板`request_payload`当中，生成最终的API请求。
+3. 步骤三：执行API调用。使用构造好的请求报文，向 `UniformTeller.qryTellerInfo` 接口发送POST请求。
+4. 步骤四：校验与断言。验证API响应的HTTP状态码为 200，同时断言响应体内容,确保 `return_code` 为 '0' 且 响应体 `data` 中的 `field1` 字段值符合预期，其值应包含前缀 '统一认证用户-'
+
+---
+
+# 接口场景  
+**类型**:接口场景
+**场景名**:验证身份证信息分支
+**关键词**:查询, 身份证, 用户信息
+
+
+场景描述：
+测试 `ssicType` 为 "2" (身份证) 的认证结果。
+
+**relevant_tables**:
+teller_info
+
+**request_payload**:
+```json
+{
+  "url": "http://localhost:8080/api/aam/uniformteller/qrytellerInfo/V1",
+  "method": "POST",
+  "headers": {
+    "X-Request-App": "F-CCPS",
+    "X-Request-Id": "2010434"
+  },
+  "json_body": {
+    "ssicType": "2",
+    "ssicId": "110101199001011234",
+    "username": "xx",
+    "email": "wangwu@example.com",
+    "phone": "13800138003",
+    "biz_content": {
+      "serviceName": "AAM",
+      "randomKey": "smxxxxxxxxsm4",
+      "timestamp": "2019-07-01 09:01:01"
+    }
+  }
+}
+```
+
+**expected_response**:
+```json
+{
+  "return_code": "0",
+  "data": {
+    "field1": "身份证用户-110101199001011234"
+  }
+}
+```
+
+步骤：  
+1. 步骤一：准备测试数据。根据测试场景，查询并准备`ssicType`为 '2' 的用户数据作为前置条件。
+2. 步骤二：构造请求报文。将步骤一中准备的数据填充至请求报文模板`request_payload`当中，生成最终的API请求。
+3. 步骤三：执行API调用。使用构造好的请求报文，向 `UniformTeller.qryTellerInfo` 接口发送POST请求。
+4. 步骤四：校验与断言。验证API响应的HTTP状态码为 200，同时断言响应体内容,确保 `return_code` 为 '0' 且 响应体 `data` 中的 `field1` 字段值符合预期，其值应包含前缀 '身份证用户-'
+
+---
+
+# 接口场景  
+**类型**:接口场景
+**场景名**:验证香港身份证分支
+**关键词**:查询, 香港身份证, 用户信息
+
+
+场景描述：
+测试 `ssicType` 为 "3" (香港身份证) 的认证结果。
+
+**relevant_tables**:
+teller_info
+
+**request_payload**:
+```json
+{
+  "url": "http://localhost:8080/api/aam/uniformteller/qrytellerInfo/V1",
+  "method": "POST",
+  "headers": {
+    "X-Request-App": "F-CCPS",
+    "X-Request-Id": "2010434"
+  },
+  "json_body": {
+    "ssicType": "3",
+    "ssicId": "B234567(8)",
+    "username": "xxx",
+    "email": "xx@example.com",
+    "phone": "+8613812345678",
+    "biz_content": {
+      "serviceName": "AAM",
+      "randomKey": "smxxxxxxxxsm4",
+      "timestamp": "2025-07-15 11:03:46"
+    }
+  }
+}
+```
+
+**expected_response**:
+```json
+{
+  "return_code": "0",
+  "data": {
+    "field1": "香港身份证用户-B234567(8)"
+  }
+}
+```
+
+步骤：  
+1. 步骤一：准备测试数据。根据测试场景，查询并准备`ssicType`为 '3' 的用户数据作为前置条件。
+2. 步骤二：构造请求报文。将步骤一中准备的数据填充至请求报文模板`request_payload`当中，生成最终的API请求。
+3. 步骤三：执行API调用。使用构造好的请求报文，向 `UniformTeller.qryTellerInfo` 接口发送POST请求。
+4. 步骤四：校验与断言。验证API响应的HTTP状态码为 200，同时断言响应体内容,确保 `return_code` 为 '0' 且 响应体 `data` 中的 `field1` 字段值符合预期，其值应包含前缀 '香港身份证用户-'
