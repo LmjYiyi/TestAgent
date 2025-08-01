@@ -1,11 +1,15 @@
+import json
 import sys
 import os
+
+from langchain_core.messages import AIMessage
+
 current_path = os.path.dirname(os.path.abspath(__file__)) # 当前文件所在目录
 main_dir = os.path.dirname(current_path) # 项目根目录
 sys.path.append(main_dir)
 from utils.logger import logger
 import re
-from typing import List, Optional
+from typing import List, Optional, Tuple, Dict
 from pathlib import Path
 from dotenv import load_dotenv
 from langchain_core.documents import Document
@@ -57,7 +61,7 @@ def load_documents(md_dir: str) -> List[Document]:
             block_meta = extract_star_fields(block)
             full_meta = base_metadata.copy()
             full_meta.update(block_meta)
-            content = block.strip()
+            content = re.sub(r"\*\*.+?\*\*\s*:.+\n?", "", block).strip()
             documents.append(Document(page_content=content, metadata=full_meta))
 
     return documents
@@ -164,14 +168,14 @@ def rag_match(query: str):
     load_environment()
 
     # 加载文档
-    md_dir = "docs/knowledge"
+    md_dir = "../docs/knowledge"
     documents = load_documents(md_dir)
 
     # 初始化嵌入模型
     embedding_model = initialize_embedding_model()
 
     # 设置向量数据库路径
-    persist_path = "db/siliconflow_vector_db"
+    persist_path = "../db/siliconflow_vector_db"
     vectorstore = load_or_create_vectorstore(documents, embedding_model, persist_path)
 
     # 初始化重排器
@@ -205,7 +209,7 @@ def get_api_steps(interface_name: str, scenario_name: str) -> Optional[List[str]
     """
     try:
         # 1. 初始化向量数据库
-        persist_path = "db/siliconflow_vector_db"
+        persist_path = "../db/siliconflow_vector_db"
         vectorstore = Chroma(
             persist_directory=persist_path,
             embedding_function=dquestion.get_embedding()
@@ -225,7 +229,7 @@ def get_api_steps(interface_name: str, scenario_name: str) -> Optional[List[str]
         )
 
         # 3. 执行检索
-        docs = retriever.invoke(f"{scenario_name}流程") or retriever.invoke(f"{interface_name}步骤")
+        docs = retriever.invoke(f"步骤")
 
         if not docs:
             print(f"未找到匹配文档 - 场景名: {scenario_name}, 接口名: {interface_name}")
@@ -240,6 +244,289 @@ def get_api_steps(interface_name: str, scenario_name: str) -> Optional[List[str]
         return None
 
 
+def retrieve_interface_data(interface_name: str) -> Optional[Tuple[Dict, str, str]]:
+    """从向量数据库检索接口元数据和原始表格内容"""
+    try:
+        persist_path = "../db/siliconflow_vector_db"  # 替换为你的向量库路径
+        vectorstore = Chroma(
+            persist_directory=persist_path,
+            embedding_function=dquestion.get_embedding()
+        )
+
+        # 检索"接口中文名+类型=通用请求参数"的文档
+        params_retriever = vectorstore.as_retriever(
+            search_kwargs={
+                "filter": {
+                    "$and": [
+                        {"接口中文名": {"$eq": interface_name}},
+                        {"类型": {"$eq": "通用请求参数"}}
+                    ]
+                },
+                "k": 1
+            }
+        )
+        header_retriever = vectorstore.as_retriever(
+            search_kwargs={
+                "filter": {
+                    "$and": [
+                        {"接口中文名": {"$eq": interface_name}},
+                        {"类型": {"$eq": "通用请求头"}}
+                    ]
+                },
+                "k": 1
+            }
+        )
+        params_docs = params_retriever.invoke(f"接口中文名：{interface_name}，类型：通用请求参数")
+        header_docs = header_retriever.invoke(f"接口中文名：{interface_name}，类型：通用请求头")
+        if not params_docs:
+            print(f"未找到接口'{interface_name}'的【通用请求参数】文档")
+            return None
+        if not header_docs:
+            print(f"未找到接口'{interface_name}'的【通用请求头】文档")
+            return None
+
+        # 返回元数据和page_content（原始表格）
+        params_doc = params_docs[0]
+        header_doc = header_docs[0]
+        return params_doc.metadata, params_doc.page_content, header_doc.page_content
+
+    except Exception as e:
+        print(f"接口数据检索失败: {str(e)}")
+        return None
+
+
+def generate_request_prompt(metadata: Dict, params_content: str, headers_content: str) -> str:
+    """生成结构化提示词，明确目标报文格式"""
+    # 格式化元数据为可读性文本
+    metadata_str = "\n".join([f"- {k}: {v}" for k, v in metadata.items()])
+
+    # 提示词模板（核心：明确完整报文结构要求）
+    return f"""
+    任务：基于接口元数据，请求头表格，参数表格，生成完整的请求报文JSON，格式需严格匹配示例结构。
+
+    === 接口元数据（提取URL和method）===
+    {metadata_str}
+    说明：请从元数据中提取"URL"作为报文的"url"字段，提取"请求方式"作为"method"字段。
+
+     === 请求头内容（生成headers字段）===
+    {headers_content}
+    说明：请从表格中提取请求头信息，按以下规则构造"headers"字段：
+    1. 表格中的"请求头字段名"作为key，"示例值"作为value（若"示例值"为"-"则留空字符串）。
+    2. 必填项："是否必输"为"是"的参数必须包含。
+
+    === 参数表格（提取json_body内容）===
+    {params_content}
+    说明：请从表格中提取参数，按以下规则构造"json_body"字段：
+    1. 父子参数规则："object"类型参数（如counterParams）是嵌套对象，其下方"├─"/"└─"前缀的参数（如counter_account）作为子字段。
+    2. 必填项："是否必输"为"是"的参数必须包含，全部使用默认示例值填充，示例值为"-"则留空字符串。
+    3. 非必填项："是否必输"为"否"的参数也必须包含，全部使用默认示例值填充，示例值为"-"则留空字符串。
+
+    === 目标报文格式（严格遵循！）===
+    {{
+        "url": "[从元数据提取的URL]",
+        "method": "[从元数据提取的请求方式]",
+        "headers": {{
+            // 从表格提取的请求头信息，示例：
+            "Content-Type": "application/json",
+            "X-Request-App": "ICBC_TestAgent",
+            "X-Request-Id": "req_base_001" 
+        }},
+        "json_body": {{
+            // 从表格提取的参数，按层级嵌套，示例：
+            "顶级参数": "示例值",
+            "object参数": {{
+                "子参数": "子参数示例值"
+            }}
+        }}
+    }}
+
+    输出要求：
+    1. 仅返回纯JSON，无任何解释文字，确保可直接解析。
+    2. "url"和"method"必须从元数据提取，不可使用示例值。
+    3. "headers"严格按表格内容构造。
+    4. "json_body"严格按表格参数构造，确保父子嵌套正确，同时返回所有参数内容，不可遗漏。
+    """
+
+
+def call_llm_generate(prompt: str) -> Optional[Dict]:
+    """调用预定义模型生成完整报文"""
+    try:
+        # 获取预定义模型
+        llm = dquestion.get_llm()
+
+        # 调用模型生成响应（返回AIMessage对象）
+        response = llm.invoke(prompt)
+
+        # 1. 提取content（处理AIMessage）
+        if isinstance(response, AIMessage):
+            response_content = response.content
+        else:
+            response_content = str(response)
+
+        # 2. 增强清理：移除所有非JSON必要字符
+        # 步骤1：移除```json和```标记（支持多行标记）
+        cleaned = re.sub(r'^```json\s*', '', response_content, flags=re.IGNORECASE | re.MULTILINE)
+        cleaned = re.sub(r'\s*```$', '', cleaned, flags=re.MULTILINE)
+        # 步骤2：移除开头/结尾的所有空白字符（包括换行、制表符、零宽字符）
+        cleaned = re.sub(r'^\s+', '', cleaned, flags=re.MULTILINE)  # 移除开头空白
+        cleaned = re.sub(r'\s+$', '', cleaned, flags=re.MULTILINE)  # 移除结尾空白
+        # 步骤3：移除可能的BOM头（Windows生成的文件可能有）
+        cleaned = cleaned.lstrip('\ufeff')
+
+        # 3. 验证清理结果（打印日志，方便调试）
+        # print(f"\n--- 清理后的JSON内容 ---")
+        # print(cleaned[:500])  # 打印前500字符，确认无异常字符
+
+        # 4. 解析JSON
+        return json.loads(cleaned)
+
+    except json.JSONDecodeError as e:
+        print(f"\nJSON解析失败: {str(e)}")
+        print(f"问题位置: 行{e.lineno}，列{e.colno}")
+        print(f"错误内容预览: {cleaned[e.pos - 20:e.pos + 20]}")  # 打印错误位置前后字符
+        return None
+    except Exception as e:
+        print(f"模型调用失败: {str(e)}")
+        return None
+
+
+@mcp.tool()
+def generate_api_request(interface_name: str) -> Optional[Dict]:
+    """
+    生成指定接口的完整请求报文（封装主流程）
+
+    参数:
+        interface_name: 接口中文名（如"商品库存查询"）
+
+    返回:
+        完整请求报文字典（包含url/method/headers/json_body），失败返回None
+    """
+    # print(f"=== 开始生成'{interface_name}'接口完整请求报文 ===")
+
+    # 1. 检索元数据、参数表格、请求头表格
+    request_data = retrieve_interface_data(interface_name)
+    if not request_data:
+        print(f"❌ 接口'{interface_name}'数据检索失败，流程终止")
+        return None
+    metadata, param_content, header_content = request_data
+
+    # 2. 生成提示词
+    prompt = generate_request_prompt(metadata, param_content, header_content)
+    # print("\n--- 提示词预览 ---")
+    # print(prompt)  # 打印前800字符，避免日志过长
+
+    # 3. 调用模型生成完整报文
+    full_request = call_llm_generate(prompt)
+    if not full_request:
+        print(f"❌ 接口'{interface_name}'报文生成失败")
+        return None
+
+    # 4. 返回结果（字典格式）
+    return full_request
+
+
+def retrieve_response_data(interface_name: str) -> str:
+    """从向量数据库检索接口元数据和原始表格内容"""
+    try:
+        persist_path = "../db/siliconflow_vector_db"  # 替换为你的向量库路径
+        vectorstore = Chroma(
+            persist_directory=persist_path,
+            embedding_function=dquestion.get_embedding()
+        )
+
+        # 检索"接口中文名+类型=通用响应参数"的文档
+        params_retriever = vectorstore.as_retriever(
+            search_kwargs={
+                "filter": {
+                    "$and": [
+                        {"接口中文名": {"$eq": interface_name}},
+                        {"类型": {"$eq": "通用响应参数"}}
+                    ]
+                },
+                "k": 1
+            }
+        )
+        params_docs = params_retriever.invoke(f"接口中文名：{interface_name}，类型：通用响应参数")
+        if not params_docs:
+            print(f"未找到接口'{interface_name}'的【通用响应参数】文档")
+            return None
+        # 返回page_content（原始表格）
+        params_doc = params_docs[0]
+        return params_doc.page_content
+
+    except Exception as e:
+        print(f"接口数据检索失败: {str(e)}")
+        return None
+
+
+def generate_response_prompt(params_content: str) -> str:
+    """生成结构化提示词，明确目标报文格式"""
+    # 提示词模板（核心：明确完整报文结构要求）
+    return f"""
+    任务：基于响应参数表格，生成完整的响应报文JSON，格式需严格匹配示例结构。
+
+    === 参数表格（提取各响应参数内容）===
+    {params_content}
+    说明：请从表格中提取参数，按以下规则构造响应报文：
+    1. 父子参数规则："object"类型参数是嵌套对象，其下方"├─"/"└─"前缀的参数作为子字段。
+    2. 必填项："是否必输"为"是"的参数必须包含，全部使用默认示例值填充，示例值为"-"则留空字符串。
+    3. 非必填项："是否必输"为"否"的参数也必须包含，全部使用默认示例值填充，示例值为"-"则留空字符串。
+
+    === 目标报文格式（严格遵循！）===
+    {{
+       // 从表格提取的参数，可能包含多层级嵌套，注意识别，示例：
+        "顶级参数1": "示例值",
+        "顶级参数2": "示例值",
+        "父级object参数": {{
+            "子参数": "子参数示例值"
+            "子级object参数": {{
+                "子参数1": "子参数示例值"
+                "子参数2": "子参数示例值"
+            }}
+        }}
+    }}
+
+    输出要求：
+    1. 仅返回纯JSON，无任何解释文字，确保可直接解析。
+    2. "严格按表格参数构造，确保父子嵌套正确，同时返回所有参数内容，不可遗漏某些参数以及某些子级参数。
+    """
+
+
+@mcp.tool()
+def generate_api_response(interface_name: str) -> Optional[Dict]:
+    """
+    生成指定接口的完整响应报文（封装主流程）
+
+    参数:
+        interface_name: 接口中文名（如"商品库存查询"）
+
+    返回:
+        完整响应报文字典（包含响应参数的值），失败返回None
+    """
+    # print(f"=== 开始生成'{interface_name}'接口完整响应报文 ===")
+
+    # 1. 检索响应参数表格
+    response_data = retrieve_response_data(interface_name)
+    if not response_data:
+        print(f"❌ 接口'{interface_name}'数据检索失败，流程终止")
+        return None
+    param_content = response_data
+
+    # 2. 生成提示词
+    prompt = generate_response_prompt(param_content)
+    # print("\n--- 提示词预览 ---")
+    # print(prompt)  # 打印前800字符，避免日志过长
+
+    # 3. 调用模型生成完整报文
+    full_request = call_llm_generate(prompt)
+    if not full_request:
+        print(f"❌ 接口'{interface_name}'报文生成失败")
+        return None
+
+    # 4. 返回结果（字典格式）
+    return full_request
+
+
 def main():
     """启动RAG-MCP服务器"""
     logger.info("启动RAG调用MCP服务器...")
@@ -247,6 +534,7 @@ def main():
         mcp.run(transport='stdio')
     except KeyboardInterrupt:
         logger.info("\n服务器被用户中断，正在关闭...")
+
 
 if __name__ == '__main__':
     main()
