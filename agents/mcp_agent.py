@@ -4,6 +4,7 @@ from models.dquestion import get_llm
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
 from utils import logger
+from prompts.agent_prompts import SYSTEM_PROMPT
 
 llm = get_llm()
 
@@ -40,7 +41,7 @@ async def get_mcp_agent():
                     #     "transport": "stdio",
                     # },
                     "mysql": {
-                        "url": "http://127.0.0.1:8000/sse",
+                        "url": "http://127.0.0.1:8003/sse",
                         "transport": "sse",
                     },
                     "test_project": {
@@ -59,19 +60,9 @@ async def get_mcp_agent():
         _client_instance = None
         return None
 
-    system_prompt = """你是一个高度专业且严格遵守指令的API测试执行Agent。
-
-## 核心执行原则
-1.  **严格单步执行**: 严格按照用户在当前任务中给出的指令执行。
-2.  **工具精准使用**: 必须通过调用合适的工具来完成任务。
-3.  **上下文驱动**: 你必须优先使用上下文中提供的数据来完成任务。
-4.  **状态传递**: **必须**使用 `update_state` 工具将关键结果保存起来。
-5.  **明确结论**: 在成功调用工具并完成任务后，**必须**输出一个简短的、人类可读的总结性文字回复。
-"""
-
     prompt = ChatPromptTemplate.from_messages(
         [
-            ("system", system_prompt),
+            ("system", SYSTEM_PROMPT),
             ("user", "{input}"),
             # 模型思考过程
             MessagesPlaceholder(variable_name="agent_scratchpad", optional=True),
