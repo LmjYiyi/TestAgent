@@ -2,7 +2,7 @@ from fastapi import APIRouter, HTTPException, Depends, Path, Body
 from typing import List, Dict, Any
 
 from utils.db_utils import DatabaseManager
-from agent.graph import build_graph
+from workflows.graph_builder import build_graph
 from langchain_core.messages import HumanMessage
 from utils.logger import setup_logger
 

@@ -52,12 +52,12 @@ app.add_middleware(
     allow_headers=["*"], # 允许所有头部
 )
 
-app.include_router(conversation_v1.router, prefix="/api/v1/conversation", tags=["Conversation"])
-app.include_router(feedback_v1.router, prefix="/api/v1/feedback", tags=["Feedback"])
-app.include_router(chat_v1.router, prefix="/api/v1/chat", tags=["Chat"])
+app.include_router(conversation_v1.router, prefix="", tags=["Conversation"])
+app.include_router(feedback_v1.router, prefix="", tags=["Feedback"])
+app.include_router(chat_v1.router, prefix="", tags=["Chat"])
 
 def main():
-    uvicorn.run(app, host="127.0.0.1", port=8005)
+    uvicorn.run(app, host="127.0.0.1", port=8000)
 
 if __name__ == '__main__':
     main()
