@@ -12,7 +12,7 @@ base_url = os.getenv("OPENAI_API_BASE")
 
 def get_llm():
     llm = ChatOpenAI(
-    model="Qwen/Qwen3-235B-A22B-Thinking-2507",
+    model="Qwen/Qwen3-235B-A22B-Instruct-2507",
     # model="deepseek-ai/DeepSeek-R1-0528-Qwen3-8B",
     openai_api_key= api_key,
     openai_api_base= base_url,
@@ -39,7 +39,7 @@ def get_reranker():
         api_key=api_key,
         base_url=f"{base_url}/rerank",
         model="BAAI/bge-reranker-v2-m3",
-        top_n=20,
+        top_n= 10,
         return_documents=True,
     )
     return compressor

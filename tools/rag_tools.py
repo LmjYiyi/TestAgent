@@ -35,7 +35,7 @@ async def query_scene_list(query: str) -> List[str]:
         raise RuntimeError(f"获取接口场景失败: {str(e)}")
 
 
-async def query_interface_details(interface_name: str, scenario_name: str) -> Tuple[list, str, str]:
+async def query_interface_details(interface_name: str, scenario_name: str) -> dict:
     """
     统一查询接口的步骤、请求参数和响应参数
     :param interface_name: 接口名称
@@ -64,13 +64,19 @@ async def query_interface_details(interface_name: str, scenario_name: str) -> Tu
             steps = []
             if hasattr(steps_result, 'structured_content') and isinstance(steps_result.structured_content, dict):
                 steps = steps_result.structured_content.get('result', [])
-            formatted_steps = [f"{i + 1}. {step}" for i, step in enumerate(steps)]
+            # formatted_steps = [step for step in enumerate(steps)]
 
             # 处理请求和响应参数
             request_params = request_result.content[0].text.strip()
             response_params = response_result.content[0].text.strip()
 
-            return formatted_steps, request_params, response_params
+            result = {
+                "steps": steps,
+                "request_payload": request_params,
+                "expected_response": response_params
+            }
+
+            return result
 
     except Exception as e:
         raise RuntimeError(f"查询接口详情失败: {str(e)}")

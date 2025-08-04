@@ -25,12 +25,12 @@ sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')  # 强制 UTF
 # 创建 FastMCP 实例
 mcp = FastMCP('RAG')
 
-# 环境变量加载
-def load_environment():
-    load_dotenv("/.env")
-    api_key = os.getenv("SILICONFLOW_API_KEY")
-    base_url = os.getenv("SILICONFLOW_API_BASE")
-    return api_key, base_url
+# # 环境变量加载
+# def load_environment():
+#     load_dotenv("/.env")
+#     api_key = os.getenv("SILICONFLOW_API_KEY")
+#     base_url = os.getenv("SILICONFLOW_API_BASE")
+#     return api_key, base_url
 
 # 加载 Markdown 文档
 def load_documents(md_dir: str) -> List[Document]:
@@ -104,9 +104,9 @@ def create_retriever(vectorstore: Chroma, reranker):
         base_retriever=vectorstore.as_retriever(
             search_type="similarity_score_threshold",
             search_kwargs={
-                "score_threshold": 0.4,
+                "score_threshold": 0.2,
                 "filter": {'类型': '接口场景'},  # 根据实际情况构建过滤条件
-                'k': 5
+                'k': 20
             }
         ),
         base_compressor=reranker,  # 重排模型
@@ -165,7 +165,7 @@ def rag_match(query: str):
     """
     print("RAG_MATCH工具正在处理，输入query：{query}")
     # 加载环境变量
-    load_environment()
+    # load_environment()
 
     # 加载文档
     md_dir = "docs/knowledge"

@@ -21,7 +21,7 @@ async def run():
 
     state = {
         "user_input": "",
-        "current_stage": "choose_scene",
+        "current_stage": "query_scene",
         "pending_action": None,
         "user_confirmed": None,
         "api_list": [],

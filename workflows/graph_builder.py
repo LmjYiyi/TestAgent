@@ -1,4 +1,3 @@
-from langchain_core.runnables.utils import Output
 from langgraph.graph import StateGraph, END
 from langchain_core.prompts import ChatPromptTemplate
 from agents.mcp_agent import get_mcp_agent
@@ -7,7 +6,7 @@ from utils import logger
 from utils.db_utils import DatabaseManager
 from tools.rag_tools import query_scene_list, query_interface_details
 from typing import TypedDict, List, Optional, Literal, Annotated, Sequence
-from langchain_core.messages import SystemMessage,BaseMessage, HumanMessage, AIMessage
+from langchain_core.messages import SystemMessage, BaseMessage, HumanMessage, AIMessage
 from langgraph.graph.message import add_messages
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from workflows.api_scene import get_scenario_steps, get_scenario_by_name, TEST_SCENARIOS
@@ -16,10 +15,9 @@ import asyncio
 import json
 
 
-
 class AgentState(TypedDict):
     user_input: str
-    current_stage: Literal["confirm_scene", "retrieve_steps", "confirm_steps", "execute_step"] 
+    current_stage: Literal["query_scene","confirm_scene", "retrieve_steps", "confirm_steps", "execute_step"] 
     pending_action: Optional[str]  # 挂起的动作
     user_confirmed: Optional[bool]  # 用户是否确认
     api_list: List[str]  # 接口场景列表
@@ -86,7 +84,8 @@ async def query_scene(state: AgentState) -> AgentState:
     else:
         state["api_list"] = api_list
         output = "我找到以下场景，请输入编号确认：\n" + \
-             "\n".join([f"{i + 1}. {s}" for i, s in enumerate(api_list)])
+             "\n".join([f"{i + 1}. {s}" for i, s in enumerate(api_list)]) + \
+             "\n\n若没有您需要的场景，请重新输入描述，建议您输入更详细的描述。"
     
         return {
             **state,
@@ -97,7 +96,8 @@ async def query_scene(state: AgentState) -> AgentState:
 
 def confirm_scene(state: AgentState) -> AgentState:
     """
-    根据用户输入的数字，直接从TEST_SCENARIOS中按顺序选择场景。
+    用于与用户交互，用户选择并确认接口-场景；
+    若没有用户需要的场景，则重新输入描述。
     """
     logger.info("用户进行场景选择.....")
     text = state["user_input"].strip()
@@ -105,21 +105,22 @@ def confirm_scene(state: AgentState) -> AgentState:
         idx = int(text) - 1
         
         # 直接从TEST_SCENARIOS获取有序的场景键列表
-        scenario_keys = list(TEST_SCENARIOS.keys())
+        # scenario_keys = list(TEST_SCENARIOS.keys())
         
         # 使用索引直接选择场景名称
-        if idx < 0 or idx >= len(scenario_keys):
+        if idx < 0 or idx >= len(state["api_list"]):
             raise IndexError("用户选择的编号超出范围")
             
-        matched_scene_name = scenario_keys[idx]
-        selected_scene_data = get_scenario_by_name(matched_scene_name)
+        selected_scene = state["api_list"][idx]
+        result_dict = dict(pair.split(": ") for pair in selected_scene.split(", "))
+        print("转换后的字典:", result_dict)
         
-        output = f"已选择场景：{matched_scene_name}，开始查询执行步骤..."
+        output = f"已选择场景：{result_dict}，开始查询场景相关信息，获取场景执行步骤..."
         print(output)
         
         return {
             **state,
-            "selected_scene": {"name": matched_scene_name, "data": selected_scene_data},
+            "selected_scene": result_dict,
             "origin_step_list": None,
             "step_list": None,
             "current_step": 0,
@@ -129,7 +130,7 @@ def confirm_scene(state: AgentState) -> AgentState:
             "output": None, # 清空输出，让流程继续
             "messages": [AIMessage(content=output)]
         }
-    except (ValueError, IndexError) as e:
+    except IndexError as e:
         logger.error(f"场景选择失败: {e}")
         output = "输入无效或编号超出范围，请重新输入有效编号。"
         return {
@@ -137,18 +138,31 @@ def confirm_scene(state: AgentState) -> AgentState:
             "output": output,
             "messages": [AIMessage(content=output)]
         }
+    except:
+        print(f"用户没有按正常方式输入，请重新输入描述。")
+        output = f"用户重新输入描述: {text}"
+        return {
+            **state,
+            "user_input": text,
+            "output": None,
+            "current_stage": "query_scene",
+            "messages": [AIMessage(content=output)]
+        }
 
 async def retrieve_steps(state: AgentState) -> AgentState:
     """
-    获取执行步骤节点
+    获取特定场景相关信息，保存在state中，并返回步骤列表
     """
     logger.info("开始进行场景步骤检索....")
-    scene_name = state["selected_scene"]["name"]
-    step_list = get_scenario_steps(scene_name)
+    selected_scene = state["selected_scene"]
+    selected_scene_data = await query_interface_details(selected_scene["接口中文名"], selected_scene["场景名"])
+    print(f"selected_scene_data: {selected_scene_data}")
+    selected_scene.update(selected_scene_data)
+    step_list = selected_scene_data["steps"]
     
     if not step_list:
-        logger.error(f"场景 {scene_name} 没有找到预定义的步骤")
-        output = f"错误：场景 {scene_name} 没有找到预定义的步骤。"
+        logger.error(f"场景 {selected_scene} 没有找到预定义的步骤")
+        output = f"错误：场景 {selected_scene} 没有找到预定义的步骤。"
         return {
             **state,
             "output": output,
@@ -157,21 +171,22 @@ async def retrieve_steps(state: AgentState) -> AgentState:
         }
         
     logger.info(f"获取到步骤: {step_list}")
-    output = f"已获取到步骤：\n{step_list}\n请确认是否需要修改，若无需修改，请输入“继续”；若需要修改，请按当前格式进行修改和追加...\n"
+    result = "\n".join([s for i,s in enumerate(step_list)])
+    output = f"已获取到步骤：\n{result}\n\n请确认是否需要修改，若无需修改，请输入“继续”；若需要修改，请按当前格式进行修改和追加...\n"
     return {
         **state,
+        "selected_scene": selected_scene,
         "output": output,
-        "origin_step_list": step_list,
+        "origin_step_list": step_list, # TODO：可以不需要了
         "step_list": None,
         "current_stage": "confirm_steps",
         "messages": [AIMessage(content=output)]
     }
     # TODO: 如果没查到的处理逻辑
 
-
 def confirm_steps(state: AgentState) -> AgentState:
     """
-    步骤确认节点，---用户交互节点
+    用于与用户交互，用户确认接口场景的步骤列表；若有需要修改的步骤，则进行修改和追加；若无修改，则返回原步骤列表。
     """
     logger.info("开始进行场景步骤修改与合并....")
     text = state["user_input"].strip()
@@ -196,7 +211,7 @@ def confirm_steps(state: AgentState) -> AgentState:
         step_list = [step  for step in content.split('\n')]
         print(f"修改后的步骤列表为：{step_list}")
         # step_list = ['步骤一、(3+5)*4等于几?', '步骤二、广州今天的天气怎么样']
-    # print(step_list)
+    
     output = f"根据用户要求，最终步骤为：\n{step_list}，共 {len(step_list)} 步。\n开始执行步骤..."
     print(output)
     return {
@@ -521,9 +536,8 @@ async def build_graph(checkpointer: BaseCheckpointSaver):
     # 设置条件入口-路由
     builder.set_conditional_entry_point(router)
     # 设置边
-        # 当场景确认后，不要停止，立即去检索步骤
+    # 当场景确认后，不要停止，立即去检索步骤
     builder.add_edge("confirm_scene", "retrieve_steps")
-    
     # 当步骤确认后，不要停止，立即去执行第一步
     builder.add_edge("confirm_steps", "execute_step")
     builder.add_edge("finish", END)
