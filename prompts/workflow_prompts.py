@@ -21,44 +21,48 @@ STEP_1_PROMPT = """
 
 STEP_2_PROMPT = """
 ### 当前任务：构造请求报文
-- **核心目标**: 使用上一步从数据库查询到的 `test_data`，动态填充 `request_payload` 模板，生成最终的API请求报文。
+- **核心目标**: 精确地根据指令，结合动态数据和固定值，生成最终的API请求报文。
 - **你的唯一指令**: 你 **必须** 调用 `update_state` 工具一次，以保存构造好的 `api_request_payload`。
 
 ### `update_state` 的参数构造规则 (必须严格遵守):
-1.  **分析**: 仔细阅读 `当前步骤描述` 和 `场景定义`，理解需要如何修改 `request_payload` 模板。
-2.  **数据来源**:
-    - **模板**: 从上下文的 `场景定义` -> `request_payload` 中获取。
-    - **动态数据**: 从上下文的 `已获取的测试数据 (Test Data)` -> `test_data[0]` 中获取。
-3.  **构建 `api_request_payload` 对象**:
-    - 复制 `场景定义` 中的 `request_payload` 模板。
-    - **智能修改 `json_body`**: 根据 `当前步骤描述` 的指引，使用 `test_data[0]` 中的值，以及 `场景定义` 中 `request_payload.json_body` 的默认值，来填充最终的 `json_body`。你需要自行判断哪些字段需要被 `test_data` 的值替换。
+1.  **分析指令优先级**:
+    - **最高优先级**: `当前步骤描述` 中明确指定的**固定值** (例如, `transfer_amount` 为 `1.00`)。这些值**必须**被直接使用，**不能**被 `test_data` 中的任何值覆盖。
+    - **第二优先级**: `当前步骤描述` 中要求从 `test_data` 获取的**动态值** (例如, `card_no`, `person_name`)。
+2.  **构建 `api_request_payload` 对象**:
+    - 复制上下文中的 `api_request_payload` 模板。
+    - **严格填充**:
+        - 对于 `当前步骤描述` 中有固定值的字段，直接使用该固定值。
+        - 对于 `当前步骤描述` 中要求使用动态数据的字段，从 `test_data[0]` 中获取并填充。
+        - 其他未提及的字段，保持模板中的默认值不变。
+3.  **绝对禁止**:
+    - **禁止覆盖**: 绝对禁止使用 `test_data` 中的值去覆盖 `当前步骤描述` 中已明确指定的固定值。例如，即使 `test_data` 中有 `usable_amount`，也不能用它来填充 `transfer_amount` 字段，因为步骤描述已经规定了 `transfer_amount` 的值。
+    - **禁止臆测**: 只能根据上述规则进行填充，禁止任何形式的自由发挥或智能猜测。
 4.  **调用工具**:
-    - 将你构造好的、完整的 `api_request_payload` 对象包装起来。
-    - 调用 `update_state`，其 `state_object` 参数必须是：`{{"api_request_payload": <你构造的完整请求报文>}}`
+    - 调用 `update_state`，其 `state_object` 参数必须是：`{{"api_request_payload": <你构造的完整请求报文>}}`。
 """
 
 STEP_3_PROMPT = """
 ### 当前任务：执行API调用并保存结果
-这是一个严格的顺序过程。你必须一步一步地执行。
+这是一个连续的、自动化的过程。你必须严格按顺序执行以下工具调用。
 
-**第一阶段：调用API**
-1.  **检查前提条件**: 首先，你必须检查上下文中 `已构造的请求体 (API Request Payload)` 是否存在且不为 `null`。
-2.  **决策**:
-    - **如果 `api_request_payload` 缺失 (为 `null`)**: 你 **必须** 停止执行并输出一条错误消息，明确指出"无法执行API调用，因为上一步未能成功构造请求报文"。
-    - **如果 `api_request_payload` 存在**: 继续执行下面的指令。
-3.  **你的唯一任务**: 调用 `call_api` 工具。
-4.  **输入**: **必须**使用上下文中已保存的、完整的 `api_request_payload` 作为 `call_api` 的参数。
-5.  **行动**: 调用 `call_api`。然后，**你必须停止并等待工具返回的API响应**。
+### **严格执行步骤 (必须遵守)**:
+1.  **检查前提条件**:
+    - **验证**: 检查上下文中 `已构造的请求体 (API Request Payload)` 是否存在且不为 `null`。
+    - **如果缺失**: 你 **必须** 停止执行并输出错误消息："无法执行API调用，因为上一步未能成功构造请求报文"。
+    - **如果存在**: 继续下一步。
 
-**第二阶段：保存响应**
-1.  **触发条件**: 在你从 `call_api` 工具那里收到了一个JSON响应之后。
-2.  **你的唯一任务**: 调用 `update_state` 工具。
-3.  **输入**: 将 `call_api` 返回的**完整的、未经修改的**JSON响应，包装后作为 `update_state` 的参数。格式必须是: `{{"last_api_response": <完整的API响应>}}`。
-4.  **行动**: 调用 `update_state`。
+2.  **调用API**:
+    - **你的唯一任务**: 调用 `call_api` 工具。
+    - **输入**: **必须**使用上下文中已保存的、完整的 `api_request_payload` 作为 `call_api` 的参数。
+
+3.  **保存API响应**:
+    - **触发条件**: `call_api` 工具成功返回响应后。
+    - **你的唯一任务**: 立即调用 `update_state` 工具。
+    - **输入**: 将 `call_api` 返回的**完整的、未经修改的**JSON响应，包装后作为 `update_state` 的参数。格式必须是: `{{"last_api_response": <完整的API响应>}}`。
 
 **绝对禁止**:
 - 在 `api_request_payload` 为 `null` 时尝试调用 `call_api`。
-- 在同一个思考步骤中同时调用 `call_api` 和 `update_state`。
+- 在一次思考中遗漏上述任何一个步骤。你必须连续完成`call_api`和`update_state`的调用。
 """
 
 STEP_4_PROMPT = """
