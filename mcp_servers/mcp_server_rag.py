@@ -168,14 +168,14 @@ def rag_match(query: str):
     load_environment()
 
     # 加载文档
-    md_dir = "../docs/knowledge"
+    md_dir = "docs/knowledge"
     documents = load_documents(md_dir)
 
     # 初始化嵌入模型
     embedding_model = initialize_embedding_model()
 
     # 设置向量数据库路径
-    persist_path = "../db/siliconflow_vector_db"
+    persist_path = "db/siliconflow_vector_db"
     vectorstore = load_or_create_vectorstore(documents, embedding_model, persist_path)
 
     # 初始化重排器
@@ -209,7 +209,7 @@ def get_api_steps(interface_name: str, scenario_name: str) -> Optional[List[str]
     """
     try:
         # 1. 初始化向量数据库
-        persist_path = "../db/siliconflow_vector_db"
+        persist_path = "db/siliconflow_vector_db"
         vectorstore = Chroma(
             persist_directory=persist_path,
             embedding_function=dquestion.get_embedding()
@@ -247,7 +247,7 @@ def get_api_steps(interface_name: str, scenario_name: str) -> Optional[List[str]
 def retrieve_interface_data(interface_name: str) -> Optional[Tuple[Dict, str, str]]:
     """从向量数据库检索接口元数据和原始表格内容"""
     try:
-        persist_path = "../db/siliconflow_vector_db"  # 替换为你的向量库路径
+        persist_path = "db/siliconflow_vector_db"  # 替换为你的向量库路径
         vectorstore = Chroma(
             persist_directory=persist_path,
             embedding_function=dquestion.get_embedding()
@@ -428,7 +428,7 @@ def generate_api_request(interface_name: str) -> Optional[Dict]:
 def retrieve_response_data(interface_name: str) -> str:
     """从向量数据库检索接口元数据和原始表格内容"""
     try:
-        persist_path = "../db/siliconflow_vector_db"  # 替换为你的向量库路径
+        persist_path = "db/siliconflow_vector_db"  # 替换为你的向量库路径
         vectorstore = Chroma(
             persist_directory=persist_path,
             embedding_function=dquestion.get_embedding()

@@ -4,14 +4,13 @@ from typing import List, Tuple
 from fastmcp import Client
 from utils import logger
 
-
 async def query_scene_list(query: str) -> List[str]:
     """
     异步调用 FastMCP 工具，获取接口场景列表
     """
     logger.info("正在调用 query_scene_list 工具...")
     try:
-        async with Client("../mcp_servers/mcp_server_rag.py") as client:
+        async with Client("mcp_servers/mcp_server_rag.py") as client:
             query = {"query": query}
             tool_result = await client.call_tool('rag_match', query)
             # 提取原始字符串
@@ -44,7 +43,7 @@ async def query_interface_details(interface_name: str, scenario_name: str) -> Tu
     :return: (步骤列表, 请求参数, 响应参数)
     """
     try:
-        async with Client("../mcp_servers/mcp_server_rag.py") as client:
+        async with Client("mcp_servers/mcp_server_rag.py") as client:
             # 1. 查询场景步骤
             steps_result = await client.call_tool('get_api_steps', {
                 "interface_name": interface_name,

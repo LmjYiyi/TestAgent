@@ -5,7 +5,7 @@ from agents.mcp_agent import get_mcp_agent
 from models.dquestion import get_llm
 from utils import logger
 from utils.db_utils import DatabaseManager
-from tools.rag_tools import query_scene_list,query_scene_steps
+from tools.rag_tools import query_scene_list, query_interface_details
 from typing import TypedDict, List, Optional, Literal, Annotated, Sequence
 from langchain_core.messages import SystemMessage,BaseMessage, HumanMessage, AIMessage
 from langgraph.graph.message import add_messages
