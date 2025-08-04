@@ -11,8 +11,11 @@ from langgraph.graph.message import add_messages
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from workflows.api_scene import get_scenario_steps, get_scenario_by_name, TEST_SCENARIOS
 from prompts.workflow_prompts import STEP_1_PROMPT, STEP_2_PROMPT, STEP_3_PROMPT, STEP_4_PROMPT
+from tools.payload_utils import _replace_datetime_placeholders, _remove_empty_fields
 import asyncio 
 import json
+import re
+from datetime import datetime
 
 
 class AgentState(TypedDict):
@@ -104,15 +107,20 @@ def confirm_scene(state: AgentState) -> AgentState:
     try:
         idx = int(text) - 1
         
-        # 直接从TEST_SCENARIOS获取有序的场景键列表
-        # scenario_keys = list(TEST_SCENARIOS.keys())
-        
-        # 使用索引直接选择场景名称
         if idx < 0 or idx >= len(state["api_list"]):
             raise IndexError("用户选择的编号超出范围")
             
-        selected_scene = state["api_list"][idx]
-        result_dict = dict(pair.split(": ") for pair in selected_scene.split(", "))
+        selected_api_string = state["api_list"][idx]
+        
+        # 从字符串中解析接口名和场景名
+        match = re.search(r"接口中文名:\s*(.+?),\s*场景名:\s*(.+)", selected_api_string.strip())
+        if not match:
+            raise ValueError(f"无法从 '{selected_api_string}' 解析场景")
+        
+        interface_name = match.group(1).strip()
+        scenario_name = match.group(2).strip()
+        
+        result_dict = {"接口中文名": interface_name, "场景名": scenario_name}
         print("转换后的字典:", result_dict)
         
         output = f"已选择场景：{result_dict}，开始查询场景相关信息，获取场景执行步骤..."
@@ -130,7 +138,7 @@ def confirm_scene(state: AgentState) -> AgentState:
             "output": None, # 清空输出，让流程继续
             "messages": [AIMessage(content=output)]
         }
-    except IndexError as e:
+    except (ValueError, IndexError) as e:
         logger.error(f"场景选择失败: {e}")
         output = "输入无效或编号超出范围，请重新输入有效编号。"
         return {
@@ -378,10 +386,28 @@ async def execute_step(state: AgentState) -> AgentState:
                     else:
                         logger.warning(f"      - 警告: 'update_state' 的输入格式不正确，缺少 'state_object' 键: {parsed_input}")
 
+        # --- **关键修复：自动填充并清理报文** ---
+        if "api_request_payload" in new_state_updates:
+            now = datetime.now()
+            # 1. 递归替换日期和时间占位符
+            payload = _replace_datetime_placeholders(
+                new_state_updates["api_request_payload"], now
+            )
+
+            # 2. 递归移除所有空值字段 (空字符串, 空列表, 空字典)
+            payload = _remove_empty_fields(payload)
+            logger.info("清理报文: 已移除所有空值字段。")
+            
+            new_state_updates["api_request_payload"] = payload
+
         # 创建一个新状态字典，先复制旧状态，再应用捕获到的更新
         next_state = state.copy()
         next_state.update(new_state_updates)
         
+        # 日志修复：确保步骤2的日志显示最终报文
+        if i == 1 and "api_request_payload" in next_state:
+            final_output = f"已成功构造API请求报文，最终报文如下：\n```json\n{json.dumps(next_state['api_request_payload'], indent=2, ensure_ascii=False)}\n```"
+
         # 更新其他流程控制字段
         next_state.update({
             "current_step": state["current_step"] + 1,
