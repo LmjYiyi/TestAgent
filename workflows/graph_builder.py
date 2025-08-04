@@ -177,7 +177,7 @@ async def retrieve_steps(state: AgentState) -> AgentState:
         **state,
         "selected_scene": selected_scene,
         "output": output,
-        "origin_step_list": step_list, # TODO：可以不需要了
+        "origin_step_list": result, # TODO：可以不需要了
         "step_list": None,
         "current_stage": "confirm_steps",
         "messages": [AIMessage(content=output)]
@@ -212,7 +212,7 @@ def confirm_steps(state: AgentState) -> AgentState:
         print(f"修改后的步骤列表为：{step_list}")
         # step_list = ['步骤一、(3+5)*4等于几?', '步骤二、广州今天的天气怎么样']
     
-    output = f"根据用户要求，最终步骤为：\n{step_list}，共 {len(step_list)} 步。\n开始执行步骤..."
+    output = f"根据用户要求，最终步骤为：\n{step_list}，共 {len(step_list)} 步。\n\n开始执行步骤..."
     print(output)
     return {
         **state,
@@ -252,37 +252,12 @@ async def execute_step(state: AgentState) -> AgentState:
     # 如果retry_input不为空，则用retry_input替代step,成功后清空
     logger.info(f"开始执行步骤{i + 1}: {step}")
     print(f"开始执行步骤{i + 1}: {step}")
-    # try:
-        # response = await agent_executor.ainvoke({"input": step})
-        # print(response)
-        # if response['output'] != "":
-        #     summary = f"步骤{i + 1}：{step} 执行成功，结果：{response['output']}"
-        #     print(summary)
-        #     return {
-        #         **state,
-        #         "current_step": i + 1,
-        #         "step_outputs": state["step_outputs"] + [summary],
-        #         "step_results": state.get("step_results", []) + [response],
-        #         "output": None,
-        #         "pending_action": None,
-        #         "retry_payload": None,  # 清空
-        #         "messages": [AIMessage(content=summary)]
-        #     }
-        # else:
-        #     output = f"步骤{i + 1}：{step} 执行失败：{str(response)}\n请输入“继续”或“停止”，或使用 参数=xxx 格式重试。"
-        #     # TODO: 添加诊断意见
-        #     return {
-        #         **state,
-        #         # "error_message": str(response),
-        #         "pending_action": f"step_{i}_error",
-        #         "user_confirmed": None,
-        #         "output": output,
-        #         "messages": [AIMessage(content=output)]
-        #     }
-    # --- 全局业务上下文注入 ---
-    full_scene_context = state.get("selected_scene", {})
-    scene_data = full_scene_context.get("data", {})
     
+    # --- 全局业务上下文注入 ---
+    # full_scene_context = state.get("selected_scene", {})
+    # scene_data = full_scene_context.get("data", {})
+    scene_data = state.get("selected_scene", {})
+    print(f"scene_data: {scene_data}")
     # --- 动态构建针对当前步骤的指令 ---
     step_specific_instructions = ""
     # 步骤索引 i 来判断，比用文本匹配可靠
@@ -297,7 +272,7 @@ async def execute_step(state: AgentState) -> AgentState:
 
     # --- 构建一个极简且聚焦的上下文和提示 ---
     input_prompt = f"""
-**当前场景**: `{full_scene_context.get("name")}`
+**当前场景**: `{scene_data.get("场景名")}`
 **当前步骤描述**: `{step}`
 
 ---
