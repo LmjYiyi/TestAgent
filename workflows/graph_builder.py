@@ -185,7 +185,7 @@ async def retrieve_steps(state: AgentState) -> AgentState:
         **state,
         "selected_scene": selected_scene,
         "output": output,
-        "origin_step_list": result, # TODO：可以不需要了
+        "origin_step_list": step_list, # TODO：可以不需要了
         "step_list": None,
         "current_stage": "confirm_steps",
         "messages": [AIMessage(content=output)]
@@ -218,9 +218,9 @@ def confirm_steps(state: AgentState) -> AgentState:
         # 假设传来的是字符串，需要转成list
         step_list = [step  for step in content.split('\n')]
         print(f"修改后的步骤列表为：{step_list}")
-        # step_list = ['步骤一、(3+5)*4等于几?', '步骤二、广州今天的天气怎么样']
     
-    output = f"根据用户要求，最终步骤为：\n{step_list}，共 {len(step_list)} 步。\n\n开始执行步骤..."
+    result = "\n".join([s for i,s in enumerate(step_list)])
+    output = f"根据用户要求，最终步骤为：\n{result}，共 {len(step_list)} 步。\n\n开始执行步骤..."
     print(output)
     return {
         **state,
