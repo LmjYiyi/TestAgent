@@ -414,7 +414,7 @@ async def execute_step(state: AgentState) -> AgentState:
             "output": final_output,
             "pending_action": None,
             "retry_payload": None,
-            "step_outputs": state["step_outputs"] + [summary],
+            "step_outputs": state["step_outputs"] + [final_output],
             "step_results": state.get("step_results", []) + [processed_response], # 保存处理后的响应
             "messages": [AIMessage(content=f"Agent:\n{summary}\n\nAssistant:\n{final_output}")]
             # "history": state["history"] + [f"Agent:\n{summary}\n\nAssistant:\n{final_output}"]
