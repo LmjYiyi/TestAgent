@@ -49,7 +49,7 @@ async def chat_stream(fastapi_req: Request, request: ChatRequest = Body(...)):
 
         # 预先处理 thread_id 和 is_new_conversation
         thread_id = request.thread_id
-        is_new_conversation = (thread_id is None)
+        is_new_conversation = (thread_id is None or thread_id == "")
 
         if not is_new_conversation:
             # 仅为继续对话的情况做预先验证
