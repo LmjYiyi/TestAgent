@@ -21,6 +21,7 @@ async def run():
 
     state = {
         "user_input": "",
+        "auto_continue": False,
         "current_stage": "query_scene",
         "pending_action": None,
         "user_confirmed": None,
@@ -38,12 +39,14 @@ async def run():
     }
     # 循环问用户
     while True:
-        # 跳出循环的判断
-        if state.get("output") and ("执行完毕" in state["output"] or "终止" in state["output"]):
+        # 检查是否到达结束状态 - 优先处理，避免不必要的用户输入
+        if state.get("current_stage") == "finish":
+            print(f"\n {state['output']}")
             await db_manager.close()
             break
-        # 需用户交互
-        if state["output"] is not None:
+        
+        # 判断是否需要用户交互
+        if not state.get("auto_continue", False):
             print(f"\n {state['output']}")
             user_input = input("\n你：").strip()
             # 主动退出判断
@@ -53,7 +56,8 @@ async def run():
                 break
             state["user_input"] = user_input
         else:
-            print("请稍等...")
+            # 在自动继续模式下，我们不需要用户的输入
+            state["user_input"] = ""
         state = await work_graph.ainvoke(state,config=config)
 
 
