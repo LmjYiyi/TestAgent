@@ -8,6 +8,10 @@ from typing import Optional, Any, Dict, List
 import json
 import asyncio
 
+# --- 第一处修改：额外导入 AgentAction AgentFinish ---
+from langchain_core.agents import AgentAction, AgentFinish 
+# ---------------------------------------
+
 from langchain_core.messages import HumanMessage, AIMessage,BaseMessage
 from langchain_core.prompts import PromptTemplate
 
@@ -26,7 +30,7 @@ class ChatRequest(BaseModel):
     thread_id: Optional[str] = None
     message: str
 
-# 通用的数据清洗函数
+# --- 第二处修改：更新这个函数 ---
 def _clean_for_json(data: Any) -> Any:
     """
     递归地清洗数据，将 LangChain/LangGraph 的特定对象转换为可序列化的字典或字符串。
@@ -35,13 +39,29 @@ def _clean_for_json(data: Any) -> Any:
         return {key: _clean_for_json(value) for key, value in data.items()}
     elif isinstance(data, list):
         return [_clean_for_json(item) for item in data]
+    elif isinstance(data, tuple):
+        return tuple(_clean_for_json(item) for item in data)
     elif isinstance(data, BaseMessage):
         return {"role": data.type, "content": data.content}
+    elif isinstance(data, AgentAction):
+        return {
+            "tool": data.tool,
+            "tool_input": _clean_for_json(data.tool_input),
+            "log": data.log
+        }
+    # --- 新增的逻辑：处理 AgentFinish ---
+    elif isinstance(data, AgentFinish):
+        return {
+            "return_values": _clean_for_json(data.return_values),
+            "log": data.log
+        }
+    # ------------------------------------
     return data
+# ---------------------------------
 
 @router.post("/aitest/stream")
 async def chat_stream(fastapi_req: Request, request: ChatRequest = Body(...)):
-    
+   
     try:
         work_graph_app = fastapi_req.app.state.work_graph_app
         if not work_graph_app:
@@ -83,11 +103,14 @@ async def chat_stream(fastapi_req: Request, request: ChatRequest = Body(...)):
 
             # 【多事件处理逻辑 - 已包含】
             async for event in work_graph_app.astream_events(final_input, config, version="v2"):
-                # print(f"\n[EVENT RECEIVED] ==> {event}\n") 
+                #print(f"\n[EVENT RECEIVED] ==> {event}\n") 
 
                 kind = event["event"]
                 name = event["name"]
                 event_data = event.get("data", {})
+                
+                # 清理整个 event_data，确保所有内容都是可序列化的
+                cleaned_event_data = _clean_for_json(event_data)
                 
                 payload = {"node_or_tool_name": name}
 
@@ -99,11 +122,10 @@ async def chat_stream(fastapi_req: Request, request: ChatRequest = Body(...)):
 
                 elif kind == "on_chain_stream":
                     if name not in ["LangGraph", "__start__", "router"]:
-                        chunk = event_data.get("chunk")
+                        chunk = cleaned_event_data.get("chunk")
                         content_to_stream = ""
-                        cleaned_chunk = _clean_for_json(chunk)
-                        if isinstance(cleaned_chunk, dict):
-                            messages = cleaned_chunk.get("messages", [])
+                        if isinstance(chunk, dict):
+                            messages = chunk.get("messages", [])
                             if messages and isinstance(messages[-1], dict):
                                 content_to_stream = messages[-1].get("content", "")
                         
@@ -116,19 +138,19 @@ async def chat_stream(fastapi_req: Request, request: ChatRequest = Body(...)):
                 elif kind == "on_chain_end":
                     if name not in ["LangGraph", "__start__", "router"]:
                         payload["type"] = "state"
-                        payload["payload"] = _clean_for_json(event_data)
+                        payload["payload"] = cleaned_event_data
                         logger.info(f"Streaming state update from node '{name}'")
                         yield f"data: {json.dumps(payload)}\n\n"
 
                 elif kind == "on_tool_start":
                     payload["type"] = "tool_start"
-                    payload["input"] = _clean_for_json(event_data.get("input"))
+                    payload["input"] = cleaned_event_data.get("input")
                     logger.info(f"Tool '{name}' started.")
                     yield f"data: {json.dumps(payload)}\n\n"
 
                 elif kind == "on_tool_end":
                     payload["type"] = "tool_end"
-                    payload["output"] = _clean_for_json(event_data.get("output"))
+                    payload["output"] = cleaned_event_data.get("output")
                     logger.info(f"Tool '{name}' ended.")
                     yield f"data: {json.dumps(payload)}\n\n"
 
@@ -138,7 +160,17 @@ async def chat_stream(fastapi_req: Request, request: ChatRequest = Body(...)):
 
             if final_state.next:
                 logger.info(f"Graph is interrupted, waiting to execute: {final_state.next}")
-                yield f"data: {json.dumps({'type': 'wait_for_input'})}\n\n"
+            # 检查是否是execute_step的自动继续状态
+                current_values = final_state.values
+                if (current_values.get("current_stage") == "execute_step" and 
+                    current_values.get("auto_continue") and
+                    current_values.get("current_step", 0) < len(current_values.get("step_list", []))):
+                    # 这是步骤执行中的自动继续，不需要用户输入
+                    logger.info("Graph is in auto-continue mode for step execution")
+                    yield f"data: {json.dumps({'type': 'auto_continue'})}\n\n"
+                else:
+                    # 真正需要用户输入的情况
+                    yield f"data: {json.dumps({'type': 'wait_for_input'})}\n\n"
             else:
                 logger.info("Graph has finished, reached END.")
                 yield f"data: {json.dumps({'type': 'end'})}\n\n"
@@ -149,7 +181,6 @@ async def chat_stream(fastapi_req: Request, request: ChatRequest = Body(...)):
     except Exception as e:
         logger.error(f"Critical error in stream for request: {request.dict()}: {e}", exc_info=True)
         return JSONResponse(status_code=500, content={"detail": f"处理消息时发生内部错误: {str(e)}"})
-
 
 async def check_and_generate_title(thread_id: str):
     try:
