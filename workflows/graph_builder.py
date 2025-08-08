@@ -106,6 +106,23 @@ def confirm_scene(state: AgentState) -> AgentState:
     """
     logger.info("用户进行场景选择.....")
     text = state["user_input"].strip()
+    
+    # 检查是否是重新描述场景（非数字输入）
+    if not text.isdigit():
+        # 用户输入的是新的描述，重新查询场景
+        logger.info(f"用户输入新的场景描述: {text}")
+        output = f"收到新的场景描述: {text}，正在重新查询相关场景..."
+        return {
+            **state,
+            "user_input": text,  # 保持用户输入用于重新查询
+            "current_stage": "query_scene",  # 回到查询场景阶段
+            "selected_scene": None,  # 清空之前的选择
+            "api_list": [],  # 清空之前的场景列表
+            "output": output,
+            "auto_continue": True,  # 自动继续到查询场景
+            "messages": [AIMessage(content=output)]
+        }
+    
     try:
         idx = int(text) - 1
         
@@ -128,8 +145,6 @@ def confirm_scene(state: AgentState) -> AgentState:
         output = f"已选择场景：{result_dict}，开始查询场景相关信息，获取场景执行步骤..."
         print(output)
         
-        output = f"已选择场景：{result_dict}，开始查询场景相关信息，获取场景执行步骤..."
-        print(output) # Keep this print for immediate feedback
         return {
             **state,
             "selected_scene": result_dict,
@@ -139,26 +154,19 @@ def confirm_scene(state: AgentState) -> AgentState:
             "step_outputs": [],
             "step_results": [],
             "current_stage": "retrieve_steps",
-            "output": output, # 确保 output 是一个字符串
-            "auto_continue": True, # 设置自动继续信号
+            "output": output,
+            "auto_continue": True,
             "messages": [AIMessage(content=output)]
         }
+        
     except (ValueError, IndexError) as e:
         logger.error(f"场景选择失败: {e}")
         output = "输入无效或编号超出范围，请重新输入有效编号。"
         return {
             **state,
             "output": output,
-            "messages": [AIMessage(content=output)]
-        }
-    except:
-        print(f"用户没有按正常方式输入，请重新输入描述。")
-        output = f"用户没有按正常方式输入，请重新输入描述。您输入的是: {text}"
-        return {
-            **state,
-            "user_input": text,
-            "output": output,
-            "current_stage": "query_scene",
+            "current_stage": "confirm_scene",  # 保持在确认场景阶段
+            "auto_continue": False,  # 停止自动继续，等待用户输入
             "messages": [AIMessage(content=output)]
         }
 
@@ -230,6 +238,7 @@ def confirm_steps(state: AgentState) -> AgentState:
     print(output)
     return {
         **state,
+        "user_input": "",  # <--- 【核心修复】 在这里清空用户输入
         "step_list": step_list,
         "current_step": 0,
         "step_outputs": [],
@@ -272,7 +281,7 @@ async def execute_step(state: AgentState) -> AgentState:
     # full_scene_context = state.get("selected_scene", {})
     # scene_data = full_scene_context.get("data", {})
     scene_data = state.get("selected_scene", {})
-    print(f"scene_data: {scene_data}")
+    #print(f"scene_data: {scene_data}")
     # --- 动态构建针对当前步骤的指令 ---
     step_specific_instructions = ""
     # 步骤索引 i 来判断，比用文本匹配可靠
@@ -420,13 +429,13 @@ async def execute_step(state: AgentState) -> AgentState:
 
         next_state.update({
             "current_step": state["current_step"] + 1,
-            "output": final_output, # 使用更新后的 final_output
+            "output": final_output,
             "pending_action": None,
             "retry_payload": None,
-            "step_outputs": state["step_outputs"] + [final_output], # 使用更新后的 final_output
-            "step_results": state.get("step_results", []) + [processed_response], # 保存处理后的响应
-            "messages": [AIMessage(content=f"Agent:\n{summary}\n\nAssistant:\n{final_output}")] # 使用更新后的 final_output
-            # "history": state["history"] + [f"Agent:\n{summary}\n\nAssistant:\n{final_output}"]
+            "auto_continue": True,  # 关键：设置自动继续，确保下一个步骤能自动执行
+            "step_outputs": state["step_outputs"] + [final_output],
+            "step_results": state.get("step_results", []) + [processed_response],
+            "messages": [AIMessage(content=f"Agent:\n{summary}\n\nAssistant:\n{final_output}")]
         })
 
         # 逻辑验证：检查执行结果是否符合预期
@@ -440,21 +449,16 @@ async def execute_step(state: AgentState) -> AgentState:
             output = f"步骤 {i + 1}：{step} 执行结果不符合预期。\n诊断信息：{validation_msg}\n请输入“继续”重试，或输入“停止”终止流程。"
             # 返回错误状态，等待用户决策
             return {
-                **state, # 返回原始 state，不保存此次失败的执行结果
-                "error_message": f"逻辑验证失败: {validation_msg}",
-                "pending_action": f"step_{i}_logic_error", # 新的挂起动作类型
-                "user_confirmed": None,
-                "output": output,
-                "messages": [AIMessage(content=output)]
-            }
+            **state, # 返回原始 state，不保存此次失败的执行结果
+            "error_message": f"逻辑验证失败: {validation_msg}",
+            "pending_action": f"step_{i}_logic_error",
+            "user_confirmed": None,
+            "auto_continue": False,  # 发生错误时停止自动继续
+            "output": output,
+            "messages": [AIMessage(content=output)]
+        }
         
-        # 新增的最终状态诊断日志
-        # logger.info(f"步骤 {i + 1} 执行完毕，应用了 {len(new_state_updates)} 个状态更新。")
-        # logger.info(f"execute_step: new_state_updates: {new_state_updates}")
-        # logger.info(f"execute_step: next_state test_data: {next_state.get('test_data')}")
-        # logger.info(f"execute_step: next_state api_request_payload: {next_state.get('api_request_payload')}")
-        # logger.info(f"execute_step: next_state last_api_response: {next_state.get('last_api_response')}")
-        # logger.info(f"execute_step: next_state assertion_result: {next_state.get('assertion_result')}")
+        
         
         print(f'step_outputs : {next_state["step_outputs"]}')
         return next_state
@@ -469,7 +473,8 @@ async def execute_step(state: AgentState) -> AgentState:
             "pending_action": f"step_{i}_error",
             "user_confirmed": None,
             "output": output,
-            "messages": [AIMessage(content=output)]
+            "messages": [AIMessage(content=output)],
+            "auto_continue": False, # 发生异常时，必须停止等待用户输入
         }
 
 
@@ -555,28 +560,56 @@ def finish(state: AgentState) -> AgentState:
 # 若当前阶段-执行步骤，且执行步骤全部完成，则进入结束节点，否则进入执行步骤节点-进行下一步步骤执行
 
 def router(state: AgentState) -> str:
+    # 如果有挂起的动作且用户未确认，进入错误处理
     if state["pending_action"] and state["user_confirmed"] is None:
         return "handle_error"
+    
+    # 根据当前阶段路由
     if state["current_stage"] == "confirm_scene":
-        if state["selected_scene"] is not None:
+        # 添加额外的安全检查
+        if state["selected_scene"] is not None and state["selected_scene"]:
             return "retrieve_steps"
         return "confirm_scene"
+    
     if state["current_stage"] == "retrieve_steps":
-        if state["origin_step_list"] is not None:
+        # 确保 selected_scene 存在且有效
+        if (state["selected_scene"] is not None and 
+            state["selected_scene"] and 
+            state["origin_step_list"] is not None):
             return "confirm_steps"
+        # 如果 selected_scene 无效，重新进入场景确认
+        if state["selected_scene"] is None:
+            return "confirm_scene"
         return "retrieve_steps"
+    
     if state["current_stage"] == "confirm_steps":
         if state["step_list"] is not None:
             return "execute_step"
         return "confirm_steps"
+    
     if state["current_stage"] == "execute_step":
+        # 检查是否还有步骤需要执行
         if state["current_step"] < len(state["step_list"]):
             return "execute_step"
         else:
             return "finish"
+    
+    # 默认返回查询场景
     return "query_scene"
 
-
+async def route_after_confirm_scene(state: AgentState) -> str:
+    """
+    根据 confirm_scene 节点的结果进行路由。
+    - 如果用户输入了新描述，则返回 'query_scene'。
+    - 如果用户选择了有效的场景，则返回 'retrieve_steps'。
+    """
+    if state.get("current_stage") == "query_scene":
+        logger.info("用户提供了新的场景描述，将路由到 'query_scene'。")
+        return "query_scene"
+    else:
+        logger.info("用户已选择场景，将路由到 'retrieve_steps'。")
+        return "retrieve_steps"
+    
 # 3. 构建图
 async def build_graph(checkpointer: BaseCheckpointSaver):
     logger.info("============构建状态图============")
@@ -592,11 +625,38 @@ async def build_graph(checkpointer: BaseCheckpointSaver):
     builder.add_node("finish", finish)  # 完成节点
     # 设置条件入口-路由
     builder.set_conditional_entry_point(router)
-    # 设置边
-    # 当场景确认后，不要停止，立即去检索步骤
-    builder.add_edge("confirm_scene", "retrieve_steps")
-    # 当步骤确认后，不要停止，立即去执行第一步
+    #builder.add_edge("confirm_scene", "retrieve_steps")
+    builder.add_conditional_edges(
+        "confirm_scene",
+        route_after_confirm_scene,
+        {
+            "query_scene": "query_scene",
+            "retrieve_steps": "retrieve_steps"
+        }
+    )
     builder.add_edge("confirm_steps", "execute_step")
+    
+    # 重要：添加execute_step到自己的边，通过router条件控制
+    builder.add_conditional_edges(
+        "execute_step",
+        router,  # 使用router函数决定下一步
+        {
+            "execute_step": "execute_step",  # 继续执行下一步
+            "finish": "finish",              # 完成所有步骤
+            "handle_error": "handle_error"   # 处理错误
+        }
+    )
+    
+    # 其他边连接
+    builder.add_conditional_edges(
+        "handle_error",
+        router,
+        {
+            "execute_step": "execute_step",
+            "query_scene": "query_scene"
+        }
+    )
+    
     builder.add_edge("finish", END)
 
     # 编译图
