@@ -102,6 +102,9 @@ async def chat_stream(fastapi_req: Request, request: ChatRequest = Body(...)):
             config = {"configurable": {"thread_id": thread_id}}
 
             # 【多事件处理逻辑 - 已包含】
+            # 只转发我们定义的业务节点，避免 LangChain 内部 Runnable 节点造成重复
+            allowed_nodes = {"LangGraph", "__start__", "router", "query_scene", "confirm_scene", "retrieve_steps", "confirm_steps", "execute_step", "handle_error", "finish"}
+
             async for event in work_graph_app.astream_events(final_input, config, version="v2"):
                 #print(f"\n[EVENT RECEIVED] ==> {event}\n") 
 
@@ -115,20 +118,23 @@ async def chat_stream(fastapi_req: Request, request: ChatRequest = Body(...)):
                 payload = {"node_or_tool_name": name}
 
                 if kind == "on_chain_start":
-                    if name not in ["LangGraph", "__start__", "router"]:
+                    if name in {"query_scene", "confirm_scene", "retrieve_steps", "confirm_steps", "execute_step", "handle_error", "finish"}:
                         payload["type"] = "node_start"
                         logger.info(f"Node '{name}' started.")
                         yield f"data: {json.dumps(payload)}\n\n"
 
                 elif kind == "on_chain_stream":
-                    if name not in ["LangGraph", "__start__", "router"]:
+                    if name in {"query_scene", "confirm_scene", "retrieve_steps", "confirm_steps", "execute_step", "handle_error", "finish"}:
+                        # 为了保证先输出 Agent 过程，再输出步骤结果：
+                        # 对 execute_step 节点不转发 chunk，只保留 on_chain_end 的 agent_process 与 state
+                        if name == "execute_step":
+                            continue
                         chunk = cleaned_event_data.get("chunk")
                         content_to_stream = ""
                         if isinstance(chunk, dict):
                             messages = chunk.get("messages", [])
                             if messages and isinstance(messages[-1], dict):
                                 content_to_stream = messages[-1].get("content", "")
-                        
                         if content_to_stream:
                             payload["type"] = "chunk"
                             payload["content"] = content_to_stream
@@ -136,9 +142,19 @@ async def chat_stream(fastapi_req: Request, request: ChatRequest = Body(...)):
                             yield f"data: {json.dumps(payload)}\n\n"
 
                 elif kind == "on_chain_end":
-                    if name not in ["LangGraph", "__start__", "router"]:
+                    if name in {"query_scene", "confirm_scene", "retrieve_steps", "confirm_steps", "execute_step", "handle_error", "finish"}:
                         payload["type"] = "state"
                         payload["payload"] = cleaned_event_data
+                        
+                        # 只有execute_step节点才可能包含Agent执行过程信息
+                        if name == "execute_step":
+                            output_data = cleaned_event_data.get("output", {})
+                            if isinstance(output_data, dict) and "agent_process" in output_data and output_data["agent_process"]:
+                                agent_process_content = output_data["agent_process"]
+                                agent_payload = {"node_or_tool_name": name, "type": "agent_process", "content": agent_process_content}
+                                logger.info(f"Streaming agent process from '{name}': {agent_process_content[:100] if len(agent_process_content) > 100 else agent_process_content}...")
+                                yield f"data: {json.dumps(agent_payload)}\n\n"
+                        
                         logger.info(f"Streaming state update from node '{name}'")
                         yield f"data: {json.dumps(payload)}\n\n"
 
