@@ -38,6 +38,7 @@ class AgentState(TypedDict):
     test_data: Optional[List[dict]]  # 测试数据
     last_api_response: Optional[dict] # API返回的参数
     assertion_result: Optional[dict] # 断言结果
+    agent_process: Optional[str]  # Agent执行过程信息
     messages: Annotated[Sequence[BaseMessage], add_messages] # 消息
 
 def create_initial_state(user_input: str) -> AgentState:
@@ -67,6 +68,7 @@ def create_initial_state(user_input: str) -> AgentState:
         test_data=None,
         last_api_response=None,
         assertion_result=None,
+        agent_process=None,
         messages=[HumanMessage(content=user_input)]
     )
 
@@ -343,28 +345,28 @@ async def execute_step(state: AgentState) -> AgentState:
         summary_lines = []
         intermediate_steps = processed_response.get("intermediate_steps", [])
         if intermediate_steps:
-            summary_lines.append("  - Agent 执行过程:")
+            summary_lines.append("- Agent 执行过程:")
             for action_dict, result in intermediate_steps:
                 tool_name = action_dict["tool"]
                 tool_input = action_dict["tool_input"]
-                summary_lines.append(f"    - 调用工具: `{tool_name}`")
+                summary_lines.append(f"  - 调用工具: `{tool_name}`")
                 # 尝试将 tool_input 转换为 JSON 字符串，如果不是字典或列表
                 if isinstance(tool_input, (dict, list)):
-                    summary_lines.append(f"    - 工具输入: {json.dumps(tool_input, ensure_ascii=False)}")
+                    summary_lines.append(f"  - 工具输入: {json.dumps(tool_input, ensure_ascii=False)}")
                 else:
-                    summary_lines.append(f"    - 工具输入: {repr(tool_input)}") # 使用 repr() 处理非 JSON 可序列化对象
+                    summary_lines.append(f"  - 工具输入: {repr(tool_input)}") # 使用 repr() 处理非 JSON 可序列化对象
                 try:
                     # 确保 result 是字符串，然后尝试解析
                     if isinstance(result, str):
                         pretty_result = json.dumps(json.loads(result), ensure_ascii=False, indent=2)
-                        summary_lines.append(f"    - 工具返回: \n{pretty_result}")
+                        summary_lines.append(f"  - 工具返回: \n{pretty_result}")
                     else:
-                        summary_lines.append(f"    - 工具返回: {repr(result)}") # 使用 repr() 处理非字符串结果
+                        summary_lines.append(f"  - 工具返回: {repr(result)}") # 使用 repr() 处理非字符串结果
                 except (json.JSONDecodeError, TypeError):
-                    summary_lines.append(f"    - 工具返回: {repr(result)}") # 捕获异常时也使用 repr()
+                    summary_lines.append(f"  - 工具返回: {repr(result)}") # 捕获异常时也使用 repr()
         
         final_output = processed_response.get("output", "无最终输出。")
-        summary_lines.append(f"  - Agent 最终结论: {final_output}")
+        summary_lines.append(f"- Agent 最终结论: {final_output}")
         summary = "\n".join(summary_lines)
         print(summary)
 
@@ -427,6 +429,9 @@ async def execute_step(state: AgentState) -> AgentState:
             print(final_output)
         
 
+        # 创建分离的Agent执行过程信息和最终结论
+        agent_process_content = f"Agent:\n{summary}"
+        
         next_state.update({
             "current_step": state["current_step"] + 1,
             "output": final_output,
@@ -435,7 +440,8 @@ async def execute_step(state: AgentState) -> AgentState:
             "auto_continue": True,  # 关键：设置自动继续，确保下一个步骤能自动执行
             "step_outputs": state["step_outputs"] + [final_output],
             "step_results": state.get("step_results", []) + [processed_response],
-            "messages": [AIMessage(content=f"Agent:\n{summary}\n\nAssistant:\n{final_output}")]
+            "agent_process": agent_process_content,  # 单独存储Agent执行过程
+            "messages": [AIMessage(content=final_output)]  # 最终结论作为主要消息
         })
 
         # 逻辑验证：检查执行结果是否符合预期
