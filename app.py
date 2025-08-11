@@ -1,6 +1,6 @@
 ###起后台服务，直接和前端对接
 ### uvicorn app:app --reload --port 8000
-###使用的是agent文件夹中的graph作为测试，因为workflows中的build_graph有多个版本，等合并后再用
+
 
 import asyncio
 from contextlib import asynccontextmanager
@@ -13,7 +13,10 @@ from pydantic import BaseModel
 from langchain_core.messages import HumanMessage
 from fastapi.middleware.cors import CORSMiddleware
 from typing import Optional
-from api.v1 import conversation as conversation_v1, feedback as feedback_v1,chat as chat_v1
+from api.v1 import chat as chat_v1
+from api.v1 import conversation as conversation_v1
+from api.v1 import feedback as feedback_v1
+from api.v1 import file as file_v1
 from utils.db_utils import db_manager
 from utils.logger import setup_logger
 # from agent.graph import build_graph, workflow
@@ -55,6 +58,7 @@ app.add_middleware(
 app.include_router(conversation_v1.router, prefix="", tags=["Conversation"])
 app.include_router(feedback_v1.router, prefix="", tags=["Feedback"])
 app.include_router(chat_v1.router, prefix="", tags=["Chat"])
+app.include_router(file_v1.router, prefix="", tags=["File Processing"])
 
 def main():
     uvicorn.run(app, host="127.0.0.1", port=8000)

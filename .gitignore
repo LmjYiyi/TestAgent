@@ -16,3 +16,4 @@ env/
 db/
 myenv2/
 *.json
+/uploaded_files_temp
