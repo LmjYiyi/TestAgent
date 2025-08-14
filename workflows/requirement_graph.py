@@ -31,29 +31,49 @@ class WorkflowState(TypedDict):
 # ======================
 # 共享工具函数
 # ======================
+# def _call_RAG(change_info: Dict) -> List[Dict]:
+#     """查询向量数据库获取相关场景"""
+#     persist_path = "../db/siliconflow_vector_db"
+#     vectorstore = Chroma(
+#         persist_directory=persist_path,
+#         embedding_function=get_embedding()
+#     )
+#
+#     retriever = vectorstore.as_retriever(
+#         search_kwargs={
+#             "filter": {
+#                 "$and": [
+#                     {"接口中文名": {"$eq": change_info["interface_name"]}},
+#                     {"类型": {"$eq": "接口场景"}}
+#                 ]
+#             },
+#             'k': 7
+#         }
+#     )
+#
+#     if change_info['change_type'] == ChangeType.FIELD_ADD1.value:
+#         return retriever.invoke("步骤")
+#     return retriever.invoke(change_info.get("logic_changes", ""))
 def _call_RAG(change_info: Dict) -> List[Dict]:
-    """查询向量数据库获取相关场景"""
+    """查询向量数据库获取相关场景（纯过滤查询，不计算相似度）"""
     persist_path = "../db/siliconflow_vector_db"
     vectorstore = Chroma(
         persist_directory=persist_path,
-        embedding_function=get_embedding()
+        embedding_function=get_embedding()  # 即使不用，也需要保留
     )
 
-    retriever = vectorstore.as_retriever(
-        search_kwargs={
-            "filter": {
-                "$and": [
-                    {"接口中文名": {"$eq": change_info["interface_name"]}},
-                    {"类型": {"$eq": "接口场景"}}
-                ]
-            },
-            'k': 7
-        }
+    # 纯过滤查询：直接按 metadata 筛选文档
+    results = vectorstore.get(
+        where={
+            "$and": [
+                {"接口中文名": {"$eq": change_info["interface_name"]}},
+                {"类型": {"$eq": "接口场景"}}
+            ]
+        },
+        limit=7  # 限制返回数量
     )
-
-    if change_info['change_type'] == ChangeType.FIELD_ADD1.value:
-        return retriever.invoke("步骤")
-    return retriever.invoke(change_info.get("logic_changes", ""))
+    # print(results)
+    return results
 
 
 def extract_steps(content: str) -> List[str]:
@@ -132,7 +152,9 @@ def extract_change_info(state: WorkflowState) -> WorkflowState:
         }},
         "dict_changes": [{{"param": "参数名", "changes": "值变化描述"}}],
         "logic_changes": "逻辑变更描述"
-    }}"""
+    }}
+    注意：interface_name直接用接口中文名且不带接口后缀，正确示例：信用卡转账支付  错误示例：信用卡转账支付接口
+    """
     try:
         response = llm.invoke(prompt)
         content = _extract_first_json(response.content if hasattr(response, "content") else str(response))
@@ -278,11 +300,16 @@ def handle_field1_change(state: WorkflowState) -> WorkflowState:
             print(f"未找到匹配文档")
             state["error_message"] = "知识库未命中相关场景，请检查接口中文名或向量库内容"
             return state
+        # state["test_scenarios"] = [{
+        #     '接口名': doc.metadata['接口中文名'],
+        #     '场景名': doc.metadata['场景名'],
+        #     '测试步骤': extract_steps(doc.page_content)
+        # } for doc in docs]
         state["test_scenarios"] = [{
-            '接口名': doc.metadata['接口中文名'],
-            '场景名': doc.metadata['场景名'],
-            '测试步骤': extract_steps(doc.page_content)
-        } for doc in docs]
+            '接口名': doc_metadata["接口中文名"],  # 从 metadatas 获取
+            '场景名': doc_metadata["场景名"],  # 从 metadatas 获取
+            '测试步骤': extract_steps(doc_content)  # 从 documents 获取
+        } for doc_content, doc_metadata in zip(docs["documents"], docs["metadatas"])]
         state["current_step"] = "field1_processed"
         state['result_message'] = "本次需求变更为新增必输字段，影响接口全场景和原始报文结构，波及的接口场景以及测试要点如下："
     except Exception as e:
@@ -331,7 +358,6 @@ def handle_field2_change(state: WorkflowState) -> WorkflowState:
         response = llm.invoke(prompt)
         content = _extract_first_json(response.content if hasattr(response, "content") else str(response))
         content = content.strip()
-        print(content)
         if content.startswith("```json"):
             content = content[7:].strip("` \n")
 
@@ -402,10 +428,14 @@ def build_test_scenario_workflow():
 if __name__ == "__main__":
     # 初始化工作流
     app = build_test_scenario_workflow()
-
+    file = ["1.纯逻辑变更.md", "2.字典值变更.md", "3.新增必输字段.md", "4.新增选输字段.md"]
+    for f in file:
+        print(f)
+    choice = input("请输入选择的需求文档编号\n")
+    number = file[int(choice) - 1]
     # 准备输入
     inputs = {
-        "file_path": "../docs/requirements/1.纯逻辑变更.md",  # 1.纯逻辑变更，2.字典值变更，3.新增必输字段，4.新增选输字段
+        "file_path": f"../docs/requirements/{number}",  # 1.纯逻辑变更，2.字典值变更，3.新增必输字段，4.新增选输字段
         "document_content": None,
         "change_info": None,
         "test_scenarios": None,
@@ -416,13 +446,11 @@ if __name__ == "__main__":
 
     # 执行工作流
     print("开始执行需求分析测试场景工作流...")
-    for output in app.stream(inputs):
-        for node, state_snapshot in output.items():
-            # print(f"\n[{node.upper()}] 步骤完成")
-            if state_snapshot.get("test_scenarios") is not None:
-                print(state_snapshot['result_message'])
-                print(json.dumps(state_snapshot["test_scenarios"], indent=2, ensure_ascii=False))
-            if state_snapshot.get("error_message"):
-                print(f"错误信息: {state_snapshot['error_message']}")
+    st = app.invoke(inputs)
+    if st.get("test_scenarios") is not None:
+        print(st.get('result_message', ''))
+        print(json.dumps(st["test_scenarios"], indent=2, ensure_ascii=False))
+    if st.get("error_message"):
+        print(f"错误信息: {st['error_message']}")
 
     print("\n工作流执行完毕")
