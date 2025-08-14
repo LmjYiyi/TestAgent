@@ -1,4 +1,6 @@
 import os
+import sys
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 import re
 import json
 from enum import Enum
@@ -405,7 +407,7 @@ if __name__ == "__main__":
 
     # 准备输入
     inputs = {
-        "file_path": "../docs/requirements/1.纯逻辑变更.md",  # 1.纯逻辑变更，2.字典值变更，3.新增必输字段，4.新增选输字段
+        "file_path": "docs/requirements/1.纯逻辑变更.md",  # 1.纯逻辑变更，2.字典值变更，3.新增必输字段，4.新增选输字段
         "document_content": None,
         "change_info": None,
         "test_scenarios": None,
