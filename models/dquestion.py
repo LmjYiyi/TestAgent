@@ -12,8 +12,9 @@ base_url = os.getenv("OPENAI_API_BASE")
 
 def get_llm():
     llm = ChatOpenAI(
-    model="Qwen/Qwen3-235B-A22B-Instruct-2507",
+    # model="Qwen/Qwen3-235B-A22B-Instruct-2507",
     # model="deepseek-ai/DeepSeek-R1-0528-Qwen3-8B",
+    model = "zai-org/GLM-4.5-Air",
     openai_api_key= api_key,
     openai_api_base= base_url,
     temperature = 0.5,

@@ -29,7 +29,7 @@ def _remove_empty_fields(obj):
        
         return {
             k: v for k, v in cleaned_children.items()
-            if v not in ["", [], {}]
+            if v not in ["", [], {}, None]
         }
     elif isinstance(obj, list):
         return [_remove_empty_fields(item) for item in obj]

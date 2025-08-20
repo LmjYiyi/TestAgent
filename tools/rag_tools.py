@@ -14,7 +14,11 @@ async def query_scene_list(query: str) -> List[str]:
             query = {"query": query}
             tool_result = await client.call_tool('rag_match', query)
             # 提取原始字符串
-            raw_text = tool_result.content[0].text.strip()
+            raw_text = ""
+            if hasattr(tool_result, 'content') and tool_result.content and len(tool_result.content) > 0:
+                raw_text = tool_result.content[0].text.strip()
+            else:
+                raise RuntimeError("工具返回结果为空")
 
             # 去掉前缀 `api_list = [` 和末尾 `]`
             if raw_text.startswith("api_list = [") and raw_text.endswith("]"):
@@ -64,11 +68,22 @@ async def query_interface_details(interface_name: str, scenario_name: str) -> di
             steps = []
             if hasattr(steps_result, 'structured_content') and isinstance(steps_result.structured_content, dict):
                 steps = steps_result.structured_content.get('result', [])
+            elif hasattr(steps_result, 'content') and steps_result.content and len(steps_result.content) > 0:
+                # 如果没有结构化内容，尝试从普通内容中提取
+                steps_text = steps_result.content[0].text.strip()
+                if steps_text:
+                    steps = [step.strip() for step in steps_text.split('\n') if step.strip()]
             # formatted_steps = [step for step in enumerate(steps)]
 
             # 处理请求和响应参数
-            request_params = request_result.content[0].text.strip()
-            response_params = response_result.content[0].text.strip()
+            request_params = ""
+            response_params = ""
+            
+            if hasattr(request_result, 'content') and request_result.content and len(request_result.content) > 0:
+                request_params = request_result.content[0].text.strip()
+            
+            if hasattr(response_result, 'content') and response_result.content and len(response_result.content) > 0:
+                response_params = response_result.content[0].text.strip()
 
             result = {
                 "steps": steps,

@@ -65,6 +65,6 @@ if __name__ == '__main__':
     try:
         asyncio.run(run())
     except Exception as e:
-        logger.error(f"测试案例智能生成助手运行异常: {e}")
+        logger.error(f"测试案例智能生成助手运行异常: {str(e)}")
     finally:
         logger.info(f"============测试案例智能生成助手结束============")

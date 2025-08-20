@@ -11,9 +11,11 @@ import asyncio
 import httpx
 import json
 import os
+import re
+from datetime import datetime
+from typing import Dict, Any, Optional, List, Union
 from mcp.server.fastmcp import FastMCP
 from mcp.types import TextContent
-from typing import Dict, Any, Optional, List
 
 # 配置日志
 logging.basicConfig(
@@ -48,6 +50,75 @@ mcp_app = FastMCP(
     port=int(os.getenv("API_MCP_PORT", "8001")),
     sse_path = "/sse"
 )
+
+def _replace_datetime_placeholders(obj, now):
+    """
+    辅助函数 获取交易时间和日期且对应被测工程接口要求的时间格式
+    """
+    if isinstance(obj, dict):
+        return {key: _replace_datetime_placeholders(value, now) for key, value in obj.items()}
+    elif isinstance(obj, list):
+        return [_replace_datetime_placeholders(item, now) for item in obj]
+    elif isinstance(obj, str):
+        if obj == "yyyy-MM-dd":
+            logger.info("Auto-replacing placeholder 'yyyy-MM-dd'")
+            return now.strftime("%Y-%m-%d")
+        if obj == "HH:mm:ss":
+            logger.info("Auto-replacing placeholder 'HH:mm:ss'")
+            return now.strftime("%H:%M:%S")
+    return obj
+
+
+def _remove_empty_fields(obj):
+    """
+    辅助函数 清洁报文中的空白字段
+    """
+    if isinstance(obj, dict):
+        
+        cleaned_children = {k: _remove_empty_fields(v) for k, v in obj.items()}
+       
+        return {
+            k: v for k, v in cleaned_children.items()
+            if v not in ["", [], {}, None]
+        }
+    elif isinstance(obj, list):
+        return [_remove_empty_fields(item) for item in obj]
+    else:
+        return obj
+
+@mcp_app.tool(description="处理API请求报文，自动填充日期时间占位符并清理空值字段。")
+async def process_payload(payload: Dict[str, Any]) -> List[TextContent]:
+    """
+    处理API请求报文，执行以下操作：
+    1. 替换日期时间占位符（如 ${CURRENT_DATE}, ${CURRENT_TIME} 等）
+    2. 递归移除所有空值字段（空字符串、空列表、空字典、None）
+    
+    Args:
+        payload (Dict[str, Any]): 要处理的API请求报文
+        
+    Returns:
+        List[TextContent]: 包含处理后的报文的TextContent列表
+    """
+    logger.info(f"接收到报文处理请求: {payload}")
+    
+    try:
+        now = datetime.now()
+        
+        # 1. 递归替换日期和时间占位符
+        processed_payload = _replace_datetime_placeholders(payload, now)
+        logger.info("已添加当前时间戳")
+        
+        # 2. 递归移除所有空值字段
+        processed_payload = _remove_empty_fields(processed_payload)
+        logger.info("已移除所有空值字段")
+        
+        result_text = json.dumps(processed_payload, ensure_ascii=False, indent=2)
+        return [TextContent(type="text", text=result_text)]
+        
+    except Exception as e:
+        logger.error(f"报文处理失败: {e}", exc_info=True)
+        error_dict = {"error": "PayloadProcessingError", "message": str(e)}
+        return [TextContent(type="text", text=json.dumps(error_dict))]
 
 @mcp_app.tool(description="调用一个通用的HTTP/HTTPS API。对于复杂的参数，请将它们作为JSON字符串在'json_body'中传递。")
 async def call_api(url: str, method: str = "POST",
@@ -133,6 +204,7 @@ async def update_state(state_object: Dict[str, Any]) -> List[TextContent]:
         logger.error(f"状态对象无法序列化为JSON: {e}", exc_info=True)
         error_dict = {"error": "SerializationError", "message": str(e)}
         return [TextContent(type="text", text=json.dumps(error_dict))]
+
 def main():
     """主函数，启动MCP服务器"""
     logger.info("启动通用API调用MCP服务器...")

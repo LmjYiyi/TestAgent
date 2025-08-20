@@ -55,7 +55,7 @@ async def get_mcp_agent():
         logger.info("开始获取工具>>>>......")
         tools = await _client_instance.get_tools()
     except Exception as e:
-        logger.error(f"获取MCP工具失败: {e}")
+        logger.error(f"获取MCP工具失败: {str(e)}")
         # 如果失败，清除实例以便下次重试
         _client_instance = None
         return None

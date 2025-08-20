@@ -10,7 +10,7 @@ from langchain_core.messages import SystemMessage, BaseMessage, HumanMessage, AI
 from langgraph.graph.message import add_messages
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from prompts.workflow_prompts import STEP_1_PROMPT, STEP_2_PROMPT, STEP_3_PROMPT, STEP_4_PROMPT
-from tools.payload_utils import _replace_datetime_placeholders, _remove_empty_fields
+
 from tools.logic_validator import validate_step_logic
 import asyncio 
 import json
@@ -20,205 +20,170 @@ from datetime import datetime
 
 class AgentState(TypedDict):
     user_input: str
-    auto_continue: bool # 新增字段，用于控制是否自动继续
-    current_stage: Literal["query_scene","confirm_scene", "retrieve_steps", "confirm_steps", "execute_step"] 
-    pending_action: Optional[str]  # 挂起的动作
-    user_confirmed: Optional[bool]  # 用户是否确认
-    api_list: List[str]  # 接口场景列表
-    selected_scene: dict  # 所选择的接口场景
-    origin_step_list: List[str]  # 原始步骤列表
-    step_list: List[str]  # 最终步骤列表
-    current_step: int  # 当前步骤
-    step_outputs: List[str]  # 步骤输出
-    step_results: List[dict]  # 步骤结果
-    error_message: Optional[str]  # 错误信息
-    retry_payload: Optional[str]  # 重试的参数
-    output: str  # 输出结果，用来标记本次的结束
-    api_request_payload: Optional[dict] # API请求参数
-    test_data: Optional[List[dict]]  # 测试数据
-    last_api_response: Optional[dict] # API返回的参数
-    assertion_result: Optional[dict] # 断言结果
-    agent_process: Optional[str]  # Agent执行过程信息
-    messages: Annotated[Sequence[BaseMessage], add_messages] # 消息
+    auto_continue: bool
+    current_stage: Literal["query_scene","confirm_scene", "retrieve_steps", "confirm_steps", "execute_step", "finish"] 
+    pending_action: Optional[str]
+    user_confirmed: Optional[bool]
+    api_list: List[str]
+    selected_scene: dict
+    origin_step_list: List[str]
+    step_list: List[str]
+    current_step: int
+    step_outputs: List[str]
+    step_results: List[dict]
+    error_message: Optional[str]
+    retry_payload: Optional[str]
+    output: str
+    api_request_payload: Optional[dict]
+    test_data: Optional[List[dict]]
+    last_api_response: Optional[dict]
+    assertion_result: Optional[dict]
+    agent_process: Optional[str]
+    messages: Annotated[Sequence[BaseMessage], add_messages]
 
 def create_initial_state(user_input: str) -> AgentState:
-    """
-    为新对话创建一个完整且符合AgentState规范的初始状态。
-    这是确保图能够正确启动的关键。
-    """
-    # 这个函数返回一个字典，其中包含了AgentState所需的所有键，并赋予它们初始的“零值”。
     return AgentState(
-        # 核心输入
-        user_input=user_input,
-        auto_continue=False,
-        current_stage="query_scene",  
-        pending_action=None,
-        user_confirmed=None,
-        api_list=[],
-        selected_scene=None,
-        origin_step_list=[],
-        step_list=[],
-        current_step=0,
-        step_outputs=[],
-        step_results=[],
-        error_message=None,
-        retry_payload=None,
-        output="",
-        api_request_payload=None,
-        test_data=None,
-        last_api_response=None,
-        assertion_result=None,
-        agent_process=None,
-        messages=[HumanMessage(content=user_input)]
+        user_input=user_input, auto_continue=False, current_stage="query_scene",  
+        pending_action=None, user_confirmed=None, api_list=[], selected_scene=None,
+        origin_step_list=[], step_list=[], current_step=0, step_outputs=[],
+        step_results=[], error_message=None, retry_payload=None, output="",
+        api_request_payload=None, test_data=None, last_api_response=None,
+        assertion_result=None, agent_process=None, messages=[HumanMessage(content=user_input)]
     )
 
 async def query_scene(state: AgentState) -> AgentState:
-    """
-    根据用户输入（state里获取），调用RAG工具检索知识库，获取对应的接口-场景列表
-    """
     logger.info("开始获取场景列表.....")
     api_list = await query_scene_list(state["user_input"])
-    # api_list = ["接口名:统一认证查询接口, 场景: 测试用户登陆", "接口名：信用卡消费，场景：准贷记卡消费"]
     logger.info(f"找到以下场景：{api_list}")
 
-    if api_list == None or len(api_list) == 0:
-        output = "没有找到您描述的接口场景，请重新调整查询描述再试"
-        return {
-            **state,
-            "output": output,
-            "messages": [AIMessage(content=output)]
-        }
+    if not api_list:
+        output_json = {"type": "text", "content": "没有找到您描述的接口场景，请重新调整查询描述再试"}
     else:
-        state["api_list"] = api_list
-        output = "我找到以下场景，请输入编号确认：\n" + \
-             "\n".join([f"{i + 1}. {s}" for i, s in enumerate(api_list)]) + \
-             "\n\n若没有您需要的场景，请重新输入描述，建议您输入更详细的描述。"
-    
-        return {
-            **state,
-            "output": output,
-            "current_stage": "confirm_scene",
-            "messages": [AIMessage(content=output)]
+        options = [{"key": str(i + 1), "description": s} for i, s in enumerate(api_list)]
+        output_json = {
+            "type": "scenario_selection", "content": "我找到了以下场景，请选择一个：",
+            "options": options, "fallback_text": "若没有您需要的场景，请重新输入描述，建议您输入更详细的描述。"
         }
+    
+    output_str = json.dumps(output_json, ensure_ascii=False)
+    return { **state, "api_list": api_list, "output": output_str, "current_stage": "confirm_scene", "messages": state["messages"] + [AIMessage(content=output_str)] }
 
 def confirm_scene(state: AgentState) -> AgentState:
-    """
-    用于与用户交互，用户选择并确认接口-场景；
-    若没有用户需要的场景，则重新输入描述。
-    """
     logger.info("用户进行场景选择.....")
     text = state["user_input"].strip()
     
-    # 检查是否是重新描述场景（非数字输入）
-    if not text.isdigit():
-        # 用户输入的是新的描述，重新查询场景
-        logger.info(f"用户输入新的场景描述: {text}")
-        output = f"收到新的场景描述: {text}，正在重新查询相关场景..."
-        return {
-            **state,
-            "user_input": text,  # 保持用户输入用于重新查询
-            "current_stage": "query_scene",  # 回到查询场景阶段
-            "selected_scene": None,  # 清空之前的选择
-            "api_list": [],  # 清空之前的场景列表
-            "output": output,
-            "auto_continue": True,  # 自动继续到查询场景
-            "messages": [AIMessage(content=output)]
-        }
+    # ✨ FIX: 使用更智能的解析逻辑，而不是简单的 isdigit()
     
+    # 1. 尝试从 "我选择场景 X: ..." 格式中提取数字
+    match = re.search(r"我选择场景\s+(\d+):", text)
+    
+    selected_index = -1
+    if match:
+        # 如果匹配成功，提取数字
+        selected_index = int(match.group(1)) - 1
+    elif text.isdigit():
+        # 2. 如果不匹配，检查整个输入是否为纯数字
+        selected_index = int(text) - 1
+
+    # 如果 selected_index 保持为 -1，说明既不是格式化选择，也不是纯数字
+    if selected_index == -1:
+        # 3. 只有在以上两种情况都失败时，才认为是新的场景描述
+        logger.info(f"输入 '{text}' 不被识别为场景选择，将作为新描述重新查询。")
+        output_json = {"type": "text", "content": f"收到新的场景描述: {text}，正在重新查询相关场景..."}
+        output_str = json.dumps(output_json, ensure_ascii=False)
+        return { 
+            **state, 
+            "user_input": text, 
+            "current_stage": "query_scene", 
+            "selected_scene": None, 
+            "api_list": [], 
+            "output": output_str, 
+            "auto_continue": True, 
+            "messages": state["messages"] + [AIMessage(content=output_str)] 
+        }
+
+    # --- 如果成功解析出编号，执行选择逻辑 ---
     try:
-        idx = int(text) - 1
-        
-        if idx < 0 or idx >= len(state["api_list"]):
+        if not (0 <= selected_index < len(state["api_list"])):
             raise IndexError("用户选择的编号超出范围")
             
-        selected_api_string = state["api_list"][idx]
-        
-        # 从字符串中解析接口名和场景名
+        selected_api_string = state["api_list"][selected_index]
         match = re.search(r"接口中文名:\s*(.+?),\s*场景名:\s*(.+)", selected_api_string.strip())
+        
         if not match:
             raise ValueError(f"无法从 '{selected_api_string}' 解析场景")
         
-        interface_name = match.group(1).strip()
-        scenario_name = match.group(2).strip()
+        result_dict = {"接口中文名": match.group(1).strip(), "场景名": match.group(2).strip()}
+        output_text = f"已选择场景：`{selected_api_string}`，开始查询场景相关信息..."
+        output_json = {"type": "text", "content": output_text}
+        output_str = json.dumps(output_json, ensure_ascii=False)
         
-        result_dict = {"接口中文名": interface_name, "场景名": scenario_name}
-        print("转换后的字典:", result_dict)
-        
-        output = f"已选择场景：{result_dict}，开始查询场景相关信息，获取场景执行步骤..."
-        print(output)
-        
-        return {
-            **state,
-            "selected_scene": result_dict,
-            "origin_step_list": None,
-            "step_list": None,
-            "current_step": 0,
-            "step_outputs": [],
-            "step_results": [],
-            "current_stage": "retrieve_steps",
-            "output": output,
-            "auto_continue": True,
-            "messages": [AIMessage(content=output)]
+        return { 
+            **state, 
+            "selected_scene": result_dict, 
+            "current_stage": "retrieve_steps", 
+            "output": output_str, 
+            "auto_continue": True, 
+            "messages": state["messages"] + [AIMessage(content=output_str)] 
         }
         
     except (ValueError, IndexError) as e:
         logger.error(f"场景选择失败: {e}")
-        output = "输入无效或编号超出范围，请重新输入有效编号。"
-        return {
-            **state,
-            "output": output,
-            "current_stage": "confirm_scene",  # 保持在确认场景阶段
-            "auto_continue": False,  # 停止自动继续，等待用户输入
-            "messages": [AIMessage(content=output)]
+        output_json = {"type": "text", "content": "输入无效或编号超出范围，请重新输入有效编号。"}
+        output_str = json.dumps(output_json, ensure_ascii=False)
+        return { 
+            **state, 
+            "output": output_str, 
+            "current_stage": "confirm_scene", 
+            "auto_continue": False, 
+            "messages": state["messages"] + [AIMessage(content=output_str)] 
         }
-
 async def retrieve_steps(state: AgentState) -> AgentState:
-    """
-    获取特定场景相关信息，保存在state中，并返回步骤列表
-    """
     logger.info("开始进行场景步骤检索....")
     selected_scene = state["selected_scene"]
     selected_scene_data = await query_interface_details(selected_scene["接口中文名"], selected_scene["场景名"])
-    print(f"selected_scene_data: {selected_scene_data}")
     selected_scene.update(selected_scene_data)
-    step_list = selected_scene_data["steps"]
+    step_list = selected_scene_data.get("steps", [])
     
     if not step_list:
-        logger.error(f"场景 {selected_scene} 没有找到预定义的步骤")
-        output = f"错误：场景 {selected_scene} 没有找到预定义的步骤。"
-        return {
-            **state,
-            "output": output,
-            "error_message": "No predefined steps found",
-            "messages": [AIMessage(content=output)]
+        # 如果真的没有步骤，返回一个明确的文本消息
+        output_json = {
+            "type": "text", 
+            "content": f"错误：场景 `{selected_scene.get('场景名', '未知')}` 没有找到任何预定义的步骤。"
         }
-        
-    logger.info(f"获取到步骤: {step_list}")
-    result = "\n".join([s for i,s in enumerate(step_list)])
-    output = f"已获取到步骤：\n{result}\n\n请确认是否需要修改，若无需修改，请输入“继续”；若需要修改，请按当前格式进行修改和追加...\n"
-    return {
-        **state,
-        "selected_scene": selected_scene,
-        "output": output,
-        "origin_step_list": step_list, # TODO：可以不需要了
-        "step_list": None,
-        "current_stage": "confirm_steps",
-        "auto_continue": False, # 确保在确认步骤前暂停，等待用户输入
-        "messages": [AIMessage(content=output)]
-    }
-    # TODO: 如果没查到的处理逻辑
+    else:
+        # ✨ FIX: 构造一个完整的、前端友好的 step_confirmation 对象
+        output_json = {
+            "type": "step_confirmation",
+            # 使用 "message" 键来传递标题，更加语义化
+            "message": "请确认步骤：", 
+            # (最关键的修复) 将原始的步骤列表数组传递给前端
+            "steps": step_list,
+            # 提供更结构化的按钮信息
+            "actions": [
+                {"key": "continue", "label": "继续", "type": "primary"}
+            ],
+            # (可选优化) 添加一条指导语
+            "instruction": "您可以直接点击“继续”以执行以上步骤，或在输入框中修改/增加步骤后发送。"
+        }
 
+    output_str = json.dumps(output_json, ensure_ascii=False)
+    return {
+        **state, 
+        "selected_scene": selected_scene, 
+        "output": output_str, 
+        "origin_step_list": step_list, 
+        "current_stage": "confirm_steps", 
+        "auto_continue": False, 
+        "messages": state["messages"] + [AIMessage(content=output_str)]
+    }
 def confirm_steps(state: AgentState) -> AgentState:
-    """
-    用于与用户交互，用户确认接口场景的步骤列表；若有需要修改的步骤，则进行修改和追加；若无修改，则返回原步骤列表。
-    """
     logger.info("开始进行场景步骤修改与合并....")
     text = state["user_input"].strip()
-    # 判断用户的输入
+    
     if "继续" in text:
         step_list = state["origin_step_list"]
     else:
-        # 调用大模型组织结果
         template2 = """用户输入：{question}，原始内容{origin}。请仔细看用户输入内容，如果是对原始内容的追加，则结合用户输入和原始文本内容，将内容进行重新组织成步骤列表；如果是完整的步骤内容，则将完整的步骤整理后返回。
         例如，用户输入：步骤四、校验数据，原始内容：步骤一、获取数据\n步骤二、处理数据\n步骤三、输出结果，则最后应该返回：步骤一、获取数据\n步骤二、处理数据\n步骤三、输出结果\n步骤四、校验数据。
         要求：
@@ -229,45 +194,37 @@ def confirm_steps(state: AgentState) -> AgentState:
         prompt2 = ChatPromptTemplate.from_template(template2)
         steps_update_chain = prompt2 | get_llm()
         response = steps_update_chain.invoke({"question": text, "origin": state['origin_step_list']})
-        print(response.content)
-        content = response.content.strip()
-        # 假设传来的是字符串，需要转成list
-        step_list = [step  for step in content.split('\n')]
-        print(f"修改后的步骤列表为：{step_list}")
+        step_list = [s.strip() for s in response.content.strip().split('\n') if s.strip()]
     
-    result = "\n".join([s for i,s in enumerate(step_list)])
-    output = f"根据用户要求，最终步骤为：\n{result}，共 {len(step_list)} 步。\n\n开始执行步骤..."
-    print(output)
-    return {
-        **state,
-        "user_input": "",  # <--- 【核心修复】 在这里清空用户输入
-        "step_list": step_list,
-        "current_step": 0,
-        "step_outputs": [],
-        "step_results": [],
-        "current_stage": "execute_step",
-        "output": output, # 确保 output 是一个字符串
-        "auto_continue": True, # 设置自动继续信号
-        "messages": [AIMessage(content=output)]
-    }
+    result_text = "根据您的要求，最终步骤为：\n\n" + "\n".join(step_list) + f"\n\n共 {len(step_list)} 步。开始执行..."
+    output_json = {"type": "text", "content": result_text}
+    output_str = json.dumps(output_json, ensure_ascii=False)
+
+    return { **state, "user_input": "", "step_list": step_list, "current_step": 0, "current_stage": "execute_step", "output": output_str, "auto_continue": True, "messages": state["messages"] + [AIMessage(content=output_str)] }
 
 
 # 2.5 执行步骤-agent节点
 async def execute_step(state: AgentState) -> AgentState:
-    # 异步获取执行agent执行器
+    """
+    执行测试计划中的单个步骤，使用MCP Agent，处理结果，并为前端返回标准化的JSON输出。
+    """
     agent_executor = await get_mcp_agent()
 
-    # 如果无法获取Agent（例如MCP服务未启动），则进入错误处理流程
+    # 处理Agent服务不可用的情况
     if agent_executor is None:
-        output = "无法连接到MCP服务，请确保所有MCP服务正在运行。\n请输入“继续”重试，或输入“停止”终止流程。"
+        output_json = {
+            "type": "text",
+            "content": "无法连接到MCP服务，请确保所有MCP服务正在运行。\n请输入“继续”重试，或输入“停止”终止流程。",
+            "error": True
+        }
+        output_str = json.dumps(output_json, ensure_ascii=False)
         i = state["current_step"]
         return {
             **state,
             "error_message": "MCP agent could not be initialized.",
-            "pending_action": f"step_{i}_error", # 复用现有的错误处理流程
-            "user_confirmed": None,
-            "output": output,
-            "messages": [AIMessage(content=output)]
+            "pending_action": f"step_{i}_error",
+            "output": output_str,
+            "messages": state["messages"] + [AIMessage(content=output_str)]
         }
     
     i = state["current_step"]
@@ -275,32 +232,19 @@ async def execute_step(state: AgentState) -> AgentState:
     retry_input = state.get("retry_payload")
     if retry_input is not None:
         step = retry_input
-    # 如果retry_input不为空，则用retry_input替代step,成功后清空
-    logger.info(f"开始执行步骤{i + 1}: {step}")
-    print(f"开始执行步骤{i + 1}: {step}")
+        
+    logger.info(f"开始执行步骤 {i + 1}: {step}")
     
-    # --- 全局业务上下文注入 ---
-    # full_scene_context = state.get("selected_scene", {})
-    # scene_data = full_scene_context.get("data", {})
     scene_data = state.get("selected_scene", {})
-    #print(f"scene_data: {scene_data}")
-    # --- 动态构建针对当前步骤的指令 ---
     step_specific_instructions = ""
-    # 步骤索引 i 来判断，比用文本匹配可靠
-    if i == 0: # 步骤一
-        step_specific_instructions = STEP_1_PROMPT
-    elif i == 1: # 步骤二
-        step_specific_instructions = STEP_2_PROMPT
-    elif i == 2: # 步骤三
-        step_specific_instructions = STEP_3_PROMPT
-    elif i == 3: # 步骤四
-        step_specific_instructions = STEP_4_PROMPT
+    if i == 0: step_specific_instructions = STEP_1_PROMPT
+    elif i == 1: step_specific_instructions = STEP_2_PROMPT
+    elif i == 2: step_specific_instructions = STEP_3_PROMPT
+    elif i == 3: step_specific_instructions = STEP_4_PROMPT
 
-    # --- 构建一个极简且聚焦的上下文和提示 ---
     input_prompt = f"""
 **当前场景**: `{scene_data.get("场景名")}`
 **当前步骤描述**: `{step}`
-
 ---
 **上下文数据**:
 - **场景定义 (Relevant parts)**: ```json
@@ -369,7 +313,8 @@ async def execute_step(state: AgentState) -> AgentState:
         summary_lines.append(f"- Agent 最终结论: {final_output}")
         summary = "\n".join(summary_lines)
         print(summary)
-
+        output_json = { "type": "agent_result", "content": final_output, "agent_process": summary }
+        output_str = json.dumps(output_json, ensure_ascii=False)
         # --- 状态更新 ---
         new_state_updates = {}
         if intermediate_steps:
@@ -404,19 +349,7 @@ async def execute_step(state: AgentState) -> AgentState:
                     else:
                         logger.warning(f"      - 警告: 'update_state' 的输入格式不正确，缺少 'state_object' 键: {parsed_input}")
 
-        # --- **关键修复：自动填充并清理报文** ---
-        if "api_request_payload" in new_state_updates:
-            now = datetime.now()
-            # 1. 递归替换日期和时间占位符
-            payload = _replace_datetime_placeholders(
-                new_state_updates["api_request_payload"], now
-            )
 
-            # 2. 递归移除所有空值字段 (空字符串, 空列表, 空字典)
-            payload = _remove_empty_fields(payload)
-            logger.info("清理报文: 已移除所有空值字段。")
-            
-            new_state_updates["api_request_payload"] = payload
 
         # 创建一个新状态字典，先复制旧状态，再应用捕获到的更新
         next_state = state.copy()
@@ -434,14 +367,14 @@ async def execute_step(state: AgentState) -> AgentState:
         
         next_state.update({
             "current_step": state["current_step"] + 1,
-            "output": final_output,
+            "output": output_str,  # 使用JSON格式的输出
             "pending_action": None,
             "retry_payload": None,
             "auto_continue": True,  # 关键：设置自动继续，确保下一个步骤能自动执行
             "step_outputs": state["step_outputs"] + [final_output],
             "step_results": state.get("step_results", []) + [processed_response],
             "agent_process": agent_process_content,  # 单独存储Agent执行过程
-            "messages": [AIMessage(content=final_output)]  # 最终结论作为主要消息
+            "messages": [AIMessage(content=output_str)]  # 使用JSON格式的消息
         })
 
         # 逻辑验证：检查执行结果是否符合预期
@@ -453,6 +386,8 @@ async def execute_step(state: AgentState) -> AgentState:
         if not is_valid:
             logger.warning(f"步骤 {i + 1} 逻辑验证失败: {validation_msg}")
             output = f"步骤 {i + 1}：{step} 执行结果不符合预期。\n诊断信息：{validation_msg}\n请输入“继续”重试，或输入“停止”终止流程。"
+            output_json = {"type": "text", "content": output, "error": True}
+            output_str = json.dumps(output_json, ensure_ascii=False)
             # 返回错误状态，等待用户决策
             return {
             **state, # 返回原始 state，不保存此次失败的执行结果
@@ -460,8 +395,8 @@ async def execute_step(state: AgentState) -> AgentState:
             "pending_action": f"step_{i}_logic_error",
             "user_confirmed": None,
             "auto_continue": False,  # 发生错误时停止自动继续
-            "output": output,
-            "messages": [AIMessage(content=output)]
+            "output": output_str,
+            "messages": [AIMessage(content=output_str)]
         }
         
         
@@ -473,13 +408,15 @@ async def execute_step(state: AgentState) -> AgentState:
         # 是不是要在这里加诊断意见？
         logger.error(f"步骤{i + 1} 执行时发生严重异常", exc_info=True)
         output = f"步骤{i + 1}：{step} 执行失败：{str(e)}。请输入“继续”或“停止”，或使用 参数=xxx 格式重试。"
+        output_json = {"type": "text", "content": output, "error": True}
+        output_str = json.dumps(output_json, ensure_ascii=False)
         return {
             **state,
             "error_message": str(e),
             "pending_action": f"step_{i}_error",
             "user_confirmed": None,
-            "output": output,
-            "messages": [AIMessage(content=output)],
+            "output": output_str,
+            "messages": [AIMessage(content=output_str)],
             "auto_continue": False, # 发生异常时，必须停止等待用户输入
         }
 
@@ -495,13 +432,15 @@ def handle_error(state: AgentState) -> AgentState:
     
     # 用户选择停止
     if "停止" in text:
-        output = "当前测试流程已由用户终止。请选择下一个场景或输入新的查询描述。"
+        output_text = "当前测试流程已由用户终止。请选择下一个场景或输入新的查询描述。"
+        output_json = {"type": "text", "content": output_text}
+        output_str = json.dumps(output_json, ensure_ascii=False)
         # 更新状态以准备选择新场景
         return {
             **state, 
             "user_confirmed": False, 
             "pending_action": None, 
-            "output": output, 
+            "output": output_str, 
             "auto_continue": False,
             "current_stage": "query_scene", # 重置为查询场景阶段
             "selected_scene": None, # 清除已选择的场景
@@ -512,49 +451,61 @@ def handle_error(state: AgentState) -> AgentState:
             "step_results": [], # 清除步骤结果
             "error_message": None, # 清除错误信息
             "retry_payload": None, # 清除重试参数
-            "messages": [AIMessage(content=output)]
+            "messages": state["messages"] + [AIMessage(content=output_str)]
         }
-
+    
     # 用户选择继续或使用新参数重试
     if "继续" in text or text.startswith("参数="):
         retry_payload = text.replace("参数=", "").strip() if "参数=" in text else None
-        output = "收到修复指令，正在重试..."
+        output_json = {"type": "text", "content": "收到修复指令，正在重试..."}
+        output_str = json.dumps(output_json, ensure_ascii=False)
         # 准备重试，清除错误状态并设置自动继续
         return {
             **state,
             "user_confirmed": None,      # 重置确认状态
             "pending_action": None,      # 清除挂起动作，以便路由可以继续
             "error_message": None,       # 清除错误信息
-            "output": output,            # 向用户显示我们正在重试
+            "output": output_str,        # 向用户显示我们正在重试
             "auto_continue": True,       # 设置自动继续信号
             "retry_payload": retry_payload,
-            "messages": [AIMessage(content=output)]
+            "messages": state["messages"] + [AIMessage(content=output_str)]
         }
     
     # 如果输入无法识别，保持在错误处理状态，并提示用户
-    output = "请输入“继续”或“停止”，或使用 `参数=xxx` 格式提供新的指令重试。"
+    output_text = "请输入\"继续\"或\"停止\"，或使用 `参数=xxx` 格式提供新的指令重试。"
+    output_json = {"type": "text", "content": output_text}
+    output_str = json.dumps(output_json, ensure_ascii=False)
     return {
         **state,
         "user_confirmed": None,
-        "output": output,
+        "output": output_str,
         "auto_continue": False, # 保持暂停，等待有效输入
-        "messages": [AIMessage(content=output)]
+        "messages": state["messages"] + [AIMessage(content=output_str)]
     }
 
-
-# 2.7 结束节点--对外输出
 def finish(state: AgentState) -> AgentState:
     logger.info("结束")
-    summary = "\n".join(state["step_outputs"])
-    output = "✅ 所有步骤执行完毕，执行摘要：\n\n" + summary
-    print(output)
-    return {
-        **state,
-        "output": output,
-        "current_stage": "finish",
-        "messages": [AIMessage(content=output)]
+    step_outputs = state.get("step_outputs", [])
+    step_list = state.get("step_list", [])
+    
+    # 创建执行摘要
+    summary = "\n".join(step_outputs)
+    output_text = "✅ 所有步骤执行完毕，执行摘要：\n\n" + summary
+    
+    # 创建包含步骤结论和执行摘要的JSON输出
+    output_json = {
+        "type": "execution_summary", 
+        "stepResults": step_outputs,
+        "finalSummary": output_text
     }
-
+    output_str = json.dumps(output_json, ensure_ascii=False)
+    
+    return { 
+        **state, 
+        "output": output_str, 
+        "current_stage": "finish", 
+        "messages": state["messages"] + [AIMessage(content=output_str)] 
+    }
 
 # ----------------------
 # 2.8 构建条件入口-router
@@ -566,41 +517,38 @@ def finish(state: AgentState) -> AgentState:
 # 若当前阶段-执行步骤，且执行步骤全部完成，则进入结束节点，否则进入执行步骤节点-进行下一步步骤执行
 
 def router(state: AgentState) -> str:
-    # 如果有挂起的动作且用户未确认，进入错误处理
-    if state["pending_action"] and state["user_confirmed"] is None:
+    # If there's a pending action and the user hasn't confirmed, handle the error
+    if state.get("pending_action") and state.get("user_confirmed") is None:
         return "handle_error"
     
-    # 根据当前阶段路由
-    if state["current_stage"] == "confirm_scene":
-        # 添加额外的安全检查
-        if state["selected_scene"] is not None and state["selected_scene"]:
+    # Route based on the current stage
+    current_stage = state.get("current_stage")
+
+    if current_stage == "confirm_scene":
+        if state.get("selected_scene"):
             return "retrieve_steps"
         return "confirm_scene"
     
-    if state["current_stage"] == "retrieve_steps":
-        # 确保 selected_scene 存在且有效
-        if (state["selected_scene"] is not None and 
-            state["selected_scene"] and 
-            state["origin_step_list"] is not None):
-            return "confirm_steps"
-        # 如果 selected_scene 无效，重新进入场景确认
-        if state["selected_scene"] is None:
-            return "confirm_scene"
-        return "retrieve_steps"
-    
-    if state["current_stage"] == "confirm_steps":
-        if state["step_list"] is not None:
+    if current_stage == "retrieve_steps":
+        # After retrieving steps, the next logical step is to wait for user confirmation
+        return "confirm_steps"
+
+    if current_stage == "confirm_steps":
+        # ✨ THE KEY FIX: Check if step_list is truthy (non-empty)
+        # This correctly treats an empty list [] as False
+        if state.get("step_list"):  
             return "execute_step"
         return "confirm_steps"
     
-    if state["current_stage"] == "execute_step":
-        # 检查是否还有步骤需要执行
-        if state["current_step"] < len(state["step_list"]):
+    if current_stage == "execute_step":
+        step_list = state.get("step_list", [])
+        current_step = state.get("current_step", 0)
+        if current_step < len(step_list):
             return "execute_step"
         else:
             return "finish"
     
-    # 默认返回查询场景
+    # Default entry point
     return "query_scene"
 
 async def route_after_confirm_scene(state: AgentState) -> str:
@@ -632,6 +580,7 @@ async def build_graph(checkpointer: BaseCheckpointSaver):
     # 设置条件入口-路由
     builder.set_conditional_entry_point(router)
     #builder.add_edge("confirm_scene", "retrieve_steps")
+    
     builder.add_conditional_edges(
         "confirm_scene",
         route_after_confirm_scene,
@@ -640,6 +589,7 @@ async def build_graph(checkpointer: BaseCheckpointSaver):
             "retrieve_steps": "retrieve_steps"
         }
     )
+    
     builder.add_edge("confirm_steps", "execute_step")
     
     # 重要：添加execute_step到自己的边，通过router条件控制

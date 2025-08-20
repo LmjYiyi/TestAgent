@@ -106,7 +106,7 @@ def create_retriever(vectorstore: Chroma, reranker):
             search_kwargs={
                 "score_threshold": 0.2,
                 "filter": {'类型': '接口场景'},  # 根据实际情况构建过滤条件
-                'k': 20
+                'k': 8
             }
         ),
         base_compressor=reranker,  # 重排模型

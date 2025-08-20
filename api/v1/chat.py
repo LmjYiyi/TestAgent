@@ -148,12 +148,60 @@ async def chat_stream(fastapi_req: Request, request: ChatRequest = Body(...)):
                         
                         # 只有execute_step节点才可能包含Agent执行过程信息
                         if name == "execute_step":
-                            output_data = cleaned_event_data.get("output", {})
-                            if isinstance(output_data, dict) and "agent_process" in output_data and output_data["agent_process"]:
-                                agent_process_content = output_data["agent_process"]
-                                agent_payload = {"node_or_tool_name": name, "type": "agent_process", "content": agent_process_content}
-                                logger.info(f"Streaming agent process from '{name}': {agent_process_content[:100] if len(agent_process_content) > 100 else agent_process_content}...")
-                                yield f"data: {json.dumps(agent_payload)}\n\n"
+                            # 检查是否有完整的agent_result消息
+                            messages = cleaned_event_data.get("messages", [])
+                            if messages:
+                                for msg in messages:
+                                    if isinstance(msg, dict) and msg.get("content"):
+                                        try:
+                                            msg_content = json.loads(msg["content"])
+                                            if msg_content.get("type") == "agent_result":
+                                                # 立即发送agent_result消息，不等待所有步骤完成
+                                                agent_result_payload = {
+                                                    "node_or_tool_name": name, 
+                                                    "type": "agent_result", 
+                                                    "content": msg_content.get("content", ""),
+                                                    "agent_process": msg_content.get("agent_process", "")
+                                                }
+                                                logger.info(f"Streaming agent result from '{name}'")
+                                                yield f"data: {json.dumps(agent_result_payload)}\n\n"
+                                                
+                                                # 发送单独的agent_process消息
+                                                if msg_content.get("agent_process"):
+                                                    agent_process_payload = {
+                                                        "node_or_tool_name": name, 
+                                                        "type": "agent_process", 
+                                                        "content": msg_content.get("agent_process", "")
+                                                    }
+                                                    logger.info(f"Streaming agent process from '{name}'")
+                                                    yield f"data: {json.dumps(agent_process_payload)}\n\n"
+                                                
+                                                # 立即刷新，确保前端能实时显示
+                                                yield f"data: {json.dumps({'type': 'flush'})}\n\n"
+                                        except json.JSONDecodeError:
+                                            continue
+                        
+                        # 处理finish节点的执行摘要
+                        elif name == "finish":
+                            # 检查是否有execution_summary消息
+                            messages = cleaned_event_data.get("messages", [])
+                            if messages:
+                                for msg in messages:
+                                    if isinstance(msg, dict) and msg.get("content"):
+                                        try:
+                                            msg_content = json.loads(msg["content"])
+                                            if msg_content.get("type") == "execution_summary":
+                                                # 发送execution_summary数据
+                                                execution_summary_payload = {
+                                                    "node_or_tool_name": name,
+                                                    "type": "execution_summary",
+                                                    "stepResults": msg_content.get("stepResults", []),
+                                                    "finalSummary": msg_content.get("finalSummary", "")
+                                                }
+                                                logger.info(f"Streaming execution summary from '{name}'")
+                                                yield f"data: {json.dumps(execution_summary_payload)}\n\n"
+                                        except json.JSONDecodeError:
+                                            continue
                         
                         logger.info(f"Streaming state update from node '{name}'")
                         yield f"data: {json.dumps(payload)}\n\n"
@@ -195,7 +243,7 @@ async def chat_stream(fastapi_req: Request, request: ChatRequest = Body(...)):
         return StreamingResponse(event_stream(), media_type="text/event-stream")
 
     except Exception as e:
-        logger.error(f"Critical error in stream for request: {request.dict()}: {e}", exc_info=True)
+        logger.error(f"Critical error in stream for request: {request.dict()}: {str(e)}", exc_info=True)
         return JSONResponse(status_code=500, content={"detail": f"处理消息时发生内部错误: {str(e)}"})
 
 async def check_and_generate_title(thread_id: str):
@@ -222,14 +270,19 @@ async def check_and_generate_title(thread_id: str):
             model = get_llm()
             history_str = "\n".join([f"{type(msg).__name__}: {msg.content}" for msg in messages])
             chain = prompt | model
-            title_response = await chain.ainvoke({"history": history_str})
-            new_title = title_response.content.strip()
+            try:
+                title_response = await chain.ainvoke({"history": history_str})
+                new_title = title_response.content.strip()
 
-            if new_title:
-                logger.info(f"Generated title for {thread_id}: '{new_title}'. Updating database.")
-                await db_manager.update_conversation_title(thread_id, new_title)
-            else:
-                logger.warning(f"Failed to generate a valid title for conversation {thread_id}.")
+                if new_title:
+                    logger.info(f"Generated title for {thread_id}: '{new_title}'. Updating database.")
+                    await db_manager.update_conversation_title(thread_id, new_title)
+                else:
+                    logger.warning(f"Failed to generate a valid title for conversation {thread_id}.")
+            except Exception as title_error:
+                # 如果标题生成失败，使用默认标题
+                logger.warning(f"Failed to generate title for conversation {thread_id}: {str(title_error)}")
+                await db_manager.update_conversation_title(thread_id, "测试对话")
 
     except Exception as e:
-        logger.error(f"Error generating title for conversation {thread_id}: {e}", exc_info=True)
+        logger.error(f"Error generating title for conversation {thread_id}: {str(e)}", exc_info=True)
