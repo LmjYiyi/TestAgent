@@ -2,11 +2,12 @@
 
 import os
 import uuid
-from fastapi import APIRouter, File, UploadFile, HTTPException, Path
+from fastapi import APIRouter, File, UploadFile, HTTPException, Path, Body
 from fastapi.responses import JSONResponse
 from utils.parser_utils import extract_text_from_file, analyze_document_with_llm
 from schemas.analysis_schemas import ChangeAnalysisResult
 from workflows.requirement_graph import build_requirement_workflow, create_initial_requirement_state
+from langchain_core.messages import HumanMessage
 
 router = APIRouter()
 UPLOAD_DIRECTORY = "./uploaded_files_temp"
@@ -68,6 +69,14 @@ async def analyze_file(
         test_scenarios = final_state.get("test_scenarios", [])
         is_success = final_state.get("error_message") is None
         
+        # 仅返回前端继续所需的会话状态（去掉不可序列化的内容）
+        def sanitize_state(state_dict: dict) -> dict:
+            safe_state = dict(state_dict)
+            # 删除不易序列化或前端不需要的字段
+            if 'messages' in safe_state:
+                safe_state.pop('messages')
+            return safe_state
+
         response_content = {
             "success": is_success,
             "message": final_state.get("result_message", "") if is_success else final_state.get("error_message", ""),
@@ -78,7 +87,9 @@ async def analyze_file(
                 "file_name": file_id,
                 "scenario_count": len(test_scenarios),
                 "current_stage": final_state.get("current_stage", ""),
-                "requires_interaction": final_state.get("current_stage") == "select_scenario"
+                "requires_interaction": final_state.get("current_stage") == "select_scenario",
+                "change_info": final_state.get("change_info", {}),
+                "session_state": sanitize_state(final_state)
             }
         }
         
@@ -94,3 +105,62 @@ async def analyze_file(
         # 确保临时文件在分析后被删除
         if os.path.exists(file_path):
             os.unlink(file_path)
+
+
+@router.post("/continue_requirement", summary="继续需求分析 - 处理用户在前端的选择并推进工作流")
+async def analyze_continue(payload: dict = Body(...)):
+    """
+    使用上一次返回的会话状态和用户输入继续执行需求分析工作流。
+
+    请求体示例：
+    {
+      "prev_state": { ... 来自 /analyze 的 data.session_state ... },
+      "user_input": "1"  // 也可以是 "全部" 或 场景名
+    }
+    """
+    try:
+        prev_state = payload.get("prev_state", {})
+        user_input = payload.get("user_input", "")
+
+        if not isinstance(prev_state, dict) or not prev_state:
+            raise HTTPException(status_code=400, detail="缺少或无效的 prev_state。")
+
+        # 重建工作流
+        workflow = await build_requirement_workflow()
+
+        # 构造继续执行所需的状态
+        # 注：不依赖历史 messages，直接提供当前 HumanMessage 即可
+        continue_state = {
+            **prev_state,
+            "user_input": str(user_input or "").strip(),
+            "messages": [HumanMessage(content=str(user_input))]
+        }
+
+        # 执行到下一个暂停点或结束
+        final_state = await workflow.ainvoke(continue_state)
+
+        def sanitize_state(state_dict: dict) -> dict:
+            safe_state = dict(state_dict)
+            if 'messages' in safe_state:
+                safe_state.pop('messages')
+            return safe_state
+
+        is_success = final_state.get("error_message") is None
+        return JSONResponse(
+            status_code=200 if is_success else 400,
+            content={
+                "success": is_success,
+                "message": final_state.get("result_message", "") if is_success else final_state.get("error_message", ""),
+                "data": {
+                    "current_stage": final_state.get("current_stage", ""),
+                    "output": final_state.get("output", ""),
+                    "all_scenario_results": final_state.get("all_scenario_results", []),
+                    "selected_scenario": final_state.get("selected_scenario", {}),
+                    "session_state": sanitize_state(final_state)
+                }
+            }
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"继续执行需求分析时发生错误: {str(e)}")

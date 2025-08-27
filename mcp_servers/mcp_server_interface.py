@@ -184,8 +184,8 @@ async def call_api(url: str, method: str = "POST",
     return [TextContent(type="text", text=result_text)]
 
 
-@mcp_app.tool(description="一个用于在Agent内部传递或更新状态的工具。它接收一个JSON对象，并原封不动地返回。当步骤的输出是一个需要在后续步骤中使用的JSON对象（例如，组装好的API请求报文）时，请使用此工具。")
-async def update_state(state_object: Dict[str, Any]) -> List[TextContent]:
+@mcp_app.tool(description="一个用于在Agent内部传递或更新状态的工具。它接收一个JSON对象，并原封不动地返回。当步骤的输出是一个需要在后续步骤中使用的JSON对象（例如，组装好的API请求报文）时，请使用此工具。支持字符串JSON，会自动解析。")
+async def update_state(state_object: Union[Dict[str, Any], str]) -> List[TextContent]:
     """
     接收一个字典（JSON对象）并将其作为字符串返回，用于在Agent的步骤之间传递状态。
 
@@ -197,7 +197,15 @@ async def update_state(state_object: Dict[str, Any]) -> List[TextContent]:
     """
     logger.info(f"接收到状态更新请求: {state_object}")
     try:
-        # 将输入的字典转换为JSON字符串
+        # 允许字符串形式的JSON，自动解析
+        if isinstance(state_object, str):
+            try:
+                state_object = json.loads(state_object)
+            except json.JSONDecodeError:
+                # 若不是合法JSON，则包裹为 raw_text 字段
+                state_object = {"raw_text": state_object}
+
+        # 将输入对象转换为JSON字符串
         result_text = json.dumps(state_object, ensure_ascii=False, indent=2)
         return [TextContent(type="text", text=result_text)]
     except TypeError as e:

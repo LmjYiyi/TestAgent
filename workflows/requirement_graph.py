@@ -4,6 +4,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 import re
 import json
 import asyncio
+import time
 from enum import Enum
 from typing import TypedDict, Optional, Literal, Dict, List, Annotated, Sequence
 from langgraph.graph import StateGraph, END
@@ -174,7 +175,8 @@ async def analyze_requirement(state: RequirementState) -> RequirementState:
     )
     
     try:
-        response = llm.invoke(prompt)
+        # 使用异步调用，避免阻塞事件循环
+        response = await asyncio.wait_for(llm.ainvoke(prompt), timeout=120)
         content = _extract_first_json(response.content if hasattr(response, "content") else str(response))
         content = content.strip()
         if content.startswith("```"):
@@ -268,7 +270,10 @@ async def handle_logic_change(state: RequirementState) -> RequirementState:
     logger.info("处理纯逻辑变更...")
     llm = get_llm()
     change_info = state["change_info"]
+    logger.info("RAG 检索开始...")
+    t0 = time.perf_counter()
     docs = _call_RAG(change_info)
+    logger.info(f"RAG 检索完成，用时 {(time.perf_counter()-t0):.2f}s，返回文档: {len(docs.get('documents', []) if isinstance(docs, dict) else [])}")
     if not docs:
         logger.warning("未找到匹配文档")
         output = "❌ 知识库未命中相关场景，请检查接口中文名或向量库内容"
@@ -297,7 +302,9 @@ async def handle_logic_change(state: RequirementState) -> RequirementState:
         docs=docs
     )
     try:
-        response = llm.invoke(prompt)
+        logger.info("LLM 生成测试场景开始...")
+        response = await asyncio.wait_for(llm.ainvoke(prompt), timeout=120)
+        logger.info("LLM 生成测试场景完成")
         content = _extract_first_json(response.content if hasattr(response, "content") else str(response))
         content = content.strip()
         if content.startswith("```json"):
@@ -365,7 +372,7 @@ async def handle_dict_change(state: RequirementState) -> RequirementState:
         docs=docs
     )
     try:
-        response = llm.invoke(prompt)
+        response = await asyncio.wait_for(llm.ainvoke(prompt), timeout=120)
         content = _extract_first_json(response.content if hasattr(response, "content") else str(response))
         content = content.strip()
         if content.startswith("```json"):
@@ -422,7 +429,10 @@ async def handle_field1_change(state: RequirementState) -> RequirementState:
     try:
         llm = get_llm()
         change_info = state["change_info"]
+        logger.info("RAG 检索开始(必输字段)...")
+        t0 = time.perf_counter()
         docs = _call_RAG(change_info)
+        logger.info(f"RAG 检索完成(必输字段)，用时 {(time.perf_counter()-t0):.2f}s，返回文档: {len(docs.get('documents', []) if isinstance(docs, dict) else [])}")
         if not docs:
             logger.warning("未找到匹配文档")
             output = "❌ 知识库未命中相关场景，请检查接口中文名或向量库内容"
@@ -450,7 +460,9 @@ async def handle_field1_change(state: RequirementState) -> RequirementState:
             original_scenarios=original_scenarios
         )
         
-        response = llm.invoke(prompt)
+        logger.info("LLM 生成必输字段场景开始...")
+        response = await asyncio.wait_for(llm.ainvoke(prompt), timeout=120)
+        logger.info("LLM 生成必输字段场景完成")
         content = _extract_first_json(response.content if hasattr(response, "content") else str(response))
         content = content.strip()
         if content.startswith("```json"):
@@ -497,7 +509,10 @@ async def handle_field2_change(state: RequirementState) -> RequirementState:
     logger.info("处理选输字段新增...")
     llm = get_llm()
     change_info = state["change_info"]
+    logger.info("RAG 检索开始(选输字段)...")
+    t0 = time.perf_counter()
     docs = _call_RAG(change_info)
+    logger.info(f"RAG 检索完成(选输字段)，用时 {(time.perf_counter()-t0):.2f}s，返回文档: {len(docs.get('documents', []) if isinstance(docs, dict) else [])}")
     if not docs:
         logger.warning("未找到匹配文档")
         output = "❌ 知识库未命中相关场景，请检查接口中文名或向量库内容"
@@ -526,7 +541,9 @@ async def handle_field2_change(state: RequirementState) -> RequirementState:
         docs=docs
     )
     try:
-        response = llm.invoke(prompt)
+        logger.info("LLM 生成选输字段场景开始...")
+        response = await asyncio.wait_for(llm.ainvoke(prompt), timeout=120)
+        logger.info("LLM 生成选输字段场景完成")
         content = _extract_first_json(response.content if hasattr(response, "content") else str(response))
         content = content.strip()
         if content.startswith("```json"):
@@ -838,7 +855,8 @@ async def execute_test(state: RequirementState) -> RequirementState:
             
             try:
                 # 调用Agent执行步骤
-                response = await agent_executor.ainvoke({"input": input_prompt})
+                # 为单步执行增加超时，避免工具/Agent卡死
+                response = await asyncio.wait_for(agent_executor.ainvoke({"input": input_prompt}), timeout=180)
                 
                 # 处理响应
                 final_output = response.get("output", "无输出")
@@ -848,6 +866,8 @@ async def execute_test(state: RequirementState) -> RequirementState:
                 # 更新状态（类似 graph_builder.py 中的逻辑）
                 new_state_updates = {}
                 intermediate_steps = response.get("intermediate_steps", [])
+                # 汇总智能体思考过程（工具调用链路）
+                agent_process_lines = []
                 
                 for action, result in intermediate_steps:
                     if hasattr(action, 'tool') and action.tool == "update_state":
@@ -861,11 +881,37 @@ async def execute_test(state: RequirementState) -> RequirementState:
                                 continue
                         elif isinstance(tool_input, dict) and "state_object" in tool_input:
                             new_state_updates.update(tool_input["state_object"])
+                    # 记录工具调用过程
+                    tool_name = getattr(action, 'tool', 'unknown_tool') if 'action' in locals() else 'unknown_tool'
+                    try:
+                        tool_in = action.tool_input if hasattr(action, 'tool_input') else None
+                    except Exception:
+                        tool_in = None
+                    tool_in_str = tool_in if isinstance(tool_in, str) else json.dumps(tool_in, ensure_ascii=False) if tool_in is not None else ""
+                    tool_in_str = (tool_in_str[:200] + '...') if len(tool_in_str) > 200 else tool_in_str
+                    result_str = ""
+                    try:
+                        result_str = result if isinstance(result, str) else json.dumps(result, ensure_ascii=False)
+                    except Exception:
+                        result_str = str(result)
+                    result_str = (result_str[:200] + '...') if len(result_str) > 200 else result_str
+                    agent_process_lines.append(f"- 调用 {tool_name}: {tool_in_str}\n  -> 返回: {result_str}")
                 
 
                 
                 # 应用状态更新
                 state.update(new_state_updates)
+                # 保存本步思考过程文本，供前端渲染
+                if agent_process_lines:
+                    state["last_agent_process"] = "\n".join(agent_process_lines)
+                
+                # 创建JSON格式的输出，类似graph_builder.py
+                output_json = {
+                    "type": "agent_result",
+                    "content": final_output,
+                    "agent_process": "\n".join(agent_process_lines) if agent_process_lines else ""
+                }
+                output_str = json.dumps(output_json, ensure_ascii=False)
                 
                 # 逻辑验证
                 is_valid, validation_msg = await validate_step_logic(
@@ -875,7 +921,11 @@ async def execute_test(state: RequirementState) -> RequirementState:
                 
                 if not is_valid:
                     logger.warning(f"步骤 {step_idx + 1} 逻辑验证失败: {validation_msg}")
-                    step_outputs.append(f"⚠️ 逻辑验证失败: {validation_msg}")
+                    # 将校验失败提示附加到当前步骤的输出，而不是新增一个步骤项
+                    if step_outputs:
+                        step_outputs[-1] = f"{step_outputs[-1]}\n⚠️ 逻辑验证失败: {validation_msg}"
+                    else:
+                        step_outputs.append(f"⚠️ 逻辑验证失败: {validation_msg}")
                 
             except Exception as e:
                 logger.error(f"步骤 {step_idx + 1} 执行失败: {str(e)}")
@@ -904,8 +954,9 @@ async def execute_test(state: RequirementState) -> RequirementState:
             for i, result in enumerate(all_scenario_results, 1):
                 output += f"\n**场景{i}: {result['场景名']}**\n"
                 for j, step_output in enumerate(result['执行结果'], 1):
-                    short_output = step_output[:100] + ('...' if len(step_output) > 100 else '')
-                    output += f"  步骤{j}: {short_output}\n"
+                    # 格式化步骤输出，确保换行和缩进正确
+                    formatted_step = step_output.replace('\n', '\n  ')
+                    output += f"  步骤{j}: {formatted_step}\n"
                 output += f"  ✅ 场景执行完成\n"
             
             output += f"\n📈 **总结**: 共执行 {len(all_scenario_results)} 个场景，全部完成。"
@@ -914,23 +965,35 @@ async def execute_test(state: RequirementState) -> RequirementState:
                 **state,
                 "selected_scenario": selected_scenario,
                 "all_scenario_results": all_scenario_results,
+                # 供前端渲染执行摘要组件
+                "execution_summary": {
+                    "finalSummary": output,
+                    "stepResults": step_outputs,
+                    "scenarioName": scenario_name,
+                    "totalSteps": len(step_outputs)
+                },
+                # 确保包含最新的智能体思考过程
+                "last_agent_process": state.get("last_agent_process"),
                 "current_stage": "finish",
                 "auto_continue": False,
-                "output": output,
-                "messages": [AIMessage(content=output)]
+                "output": json.dumps({"type": "execution_summary", "content": output}, ensure_ascii=False),
+                "messages": [AIMessage(content=json.dumps({"type": "execution_summary", "content": output}, ensure_ascii=False))]
             }
         else:
             # 继续执行下一个场景，显示当前场景的执行结果
             current_scenario_output = f"✅ 场景 '{scenario_name}' 执行完成\n\n📋 **执行结果**:\n"
             for j, step_output in enumerate(step_outputs, 1):
-                short_output = step_output[:100] + ('...' if len(step_output) > 100 else '')
-                current_scenario_output += f"  步骤{j}: {short_output}\n"
+                # 格式化步骤输出
+                formatted_step = step_output.replace('\n', '\n  ')
+                current_scenario_output += f"  步骤{j}: {formatted_step}\n"
             current_scenario_output += f"\n📄 继续执行下一个场景..."
             
             return {
                 **state,
                 "selected_scenario": selected_scenario,
                 "all_scenario_results": all_scenario_results,
+                # 确保包含最新的智能体思考过程
+                "last_agent_process": state.get("last_agent_process"),
                 "auto_continue": True,
                 "output": current_scenario_output,
                 "messages": [AIMessage(content=current_scenario_output)]
